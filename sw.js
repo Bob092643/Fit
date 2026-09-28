@@ -1,4 +1,5 @@
-const CACHE = 'fitworden-v4';
+const CACHE = 'fitworden-v6';
+const SDK = 'fitworden-sdk';
 const ASSETS = ['./', 'index.html', 'styles.css', 'data.js', 'app.js', 'firebase-config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 const INDEX = new URL('index.html', self.registration.scope).href;
 const TIMEOUT = 3500;
@@ -8,7 +9,7 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== SDK).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 function fromNetwork(url, key, cache) {
@@ -25,6 +26,15 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/')) {
+    e.respondWith(caches.open(SDK).then(async c => {
+      const hit = await c.match(req); if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok || res.type === 'opaque') c.put(req, res.clone());
+      return res;
+    }));
+    return;
+  }
   if (url.hostname === 'firestore.googleapis.com' || url.origin !== location.origin) return;
   const isNav = req.mode === 'navigate';
   const fresh = isNav || /\.(html|js|css|webmanifest)$/.test(url.pathname);

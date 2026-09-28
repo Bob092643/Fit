@@ -21,16 +21,16 @@ const TIMED_START = { A1: 1, C1: 0, B2: 0 };
 const WEIGHT_OPTIONS = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
 const WORDS = ['nul', 'één', 'twee', 'drie', 'vier', 'vijf', 'zes'];
 
-let state = load();
-let active = loadActive();
-let ui = { tab: 'home', progTab: 'overview', foodTab: 'log', foodCat: 'Alles', foodDate: null, exSel: null, pv: null, edit: null };
-let audioCtx = null, wakeLock = null, tickTimer = null, lastBeep = '', deferredInstall = null;
-
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const clone = o => JSON.parse(JSON.stringify(o));
+
+let state = load();
+let active = loadActive();
+let ui = { tab: 'home', progTab: 'overview', foodTab: 'log', foodCat: 'Alles', foodDate: null, exSel: null, pv: null, edit: null };
+let audioCtx = null, wakeLock = null, tickTimer = null, lastBeep = '', deferredInstall = null;
 
 function defaultState() {
   return {
@@ -42,6 +42,7 @@ function defaultState() {
     swaps: {}, deload: { active: false, start: null }, deloadSnooze: null, cycleStart: null, food: {}
   };
 }
+function isObjM(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 function migrate(s) {
   s = s || {};
   const d = defaultState();
@@ -53,6 +54,13 @@ function migrate(s) {
   ['swaps', 'food'].forEach(k => { if (!out[k] || typeof out[k] !== 'object' || Array.isArray(out[k])) out[k] = {}; });
   if (!out.deload || typeof out.deload !== 'object') out.deload = { active: false, start: null };
   Object.keys(out.swaps).forEach(k => { if (!EX[k] || !EX[out.swaps[k]]) delete out.swaps[k]; });
+  if (!isObjM(out.prog.ex)) out.prog.ex = {};
+  if (!isObjM(out.prog.timed)) out.prog.timed = {};
+  if (!isObjM(out.prog.run)) out.prog.run = { lvl: 0, ok: 0 };
+  Object.keys(out.prog.ex).forEach(k => { if (!EX[k] || !isObjM(out.prog.ex[k])) delete out.prog.ex[k]; });
+  out.prog.run.lvl = clamp(+out.prog.run.lvl || 0, 0, RUN_LEVELS.length - 1);
+  Object.keys(out.prog.timed).forEach(k => { const t = out.prog.timed[k]; if (!isObjM(t)) delete out.prog.timed[k]; else t.lvl = clamp(+t.lvl || 0, 0, ladderFor(k).length - 1); });
+  out.sugg = out.sugg.filter(x => isObjM(x) && x.id && (x.t !== 'ex' || EX[x.key]));
   if (!out.cycleStart) {
     const first = out.sessions.find(x => x.wid !== 'free');
     out.cycleStart = first ? first.date : null;
@@ -61,7 +69,12 @@ function migrate(s) {
   return out;
 }
 function load() {
-  try { return migrate(JSON.parse(localStorage.getItem(KEY))); } catch (e) { return defaultState(); }
+  let raw = null;
+  try { raw = localStorage.getItem(KEY); return migrate(JSON.parse(raw)); }
+  catch (e) {
+    try { if (raw) localStorage.setItem(KEY + '.herstel', raw); } catch (x) {}
+    return defaultState();
+  }
 }
 function saveLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Opslaan mislukt: opslag vol?'); }
@@ -335,6 +348,7 @@ function render() {
   if (onb) { v.innerHTML = viewOnboarding(); return; }
   const map = { home: viewHome, train: viewTrain, progress: viewProgress, food: viewFood, more: viewMore };
   v.innerHTML = map[ui.tab]();
+  setCloudStatus(cloud.status);
 }
 
 function viewOnboarding() {
@@ -456,6 +470,29 @@ function swapHtml(orig, ctx, cur, taken) {
     '<div class="actions"><button class="btn block ghost" data-action="swapBack" data-ctx="' + ctx + '">Terug</button></div>';
 }
 
+function lastItem(id) {
+  const S = realSessions();
+  for (let i = S.length - 1; i >= 0; i--) for (const b of S[i].blocks) if (b.type === 'sets') { const it = b.items.find(x => x.id === id && x.sets.length); if (it) return { date: S[i].date, it }; }
+  return null;
+}
+function lastBlock(pred) {
+  const S = realSessions();
+  for (let i = S.length - 1; i >= 0; i--) { const b = S[i].blocks.find(pred); if (b) return { date: S[i].date, b }; }
+  return null;
+}
+function shortDay(iso) { return fmtDate(iso, { weekday: 'short', day: 'numeric', month: 'short' }); }
+function prevText(id) {
+  const l = lastItem(id); if (!l) return '';
+  return 'Vorige keer (' + shortDay(l.date) + '): ' + l.it.sets.join(' · ') + (l.it.kind === 'time' ? ' s' : '') + (l.it.w ? ' @ ' + num(l.it.w) + ' kg' : '');
+}
+function prevTimedText(key) {
+  const l = lastBlock(b => b.type === 'timed' && b.key === key); if (!l) return '';
+  return 'Vorige keer (' + shortDay(l.date) + '): ' + l.b.done + ' van ' + l.b.rounds + ' rondes · ' + l.b.work + '/' + l.b.rest + ' s';
+}
+function prevRunText() {
+  const l = lastBlock(b => b.type === 'run'); if (!l) return '';
+  return 'Vorige keer (' + shortDay(l.date) + '): niveau ' + (l.b.lvl + 1) + ', ' + l.b.done + ' van ' + l.b.reps + ' looprondes (' + fmtMin(l.b.runSec) + ' gelopen)';
+}
 function explainTimed(b) {
   return b.work + ' s werk en ' + b.rest + ' s rust per oefening. ' + b.ex.length + ' oefeningen achter elkaar = 1 ronde; ' + word(b.rounds) + (b.rounds === 1 ? ' ronde' : ' rondes') + (b.rounds > 1 ? ' met ' + b.roundRest + ' s pauze ertussen.' : '.');
 }
@@ -572,7 +609,8 @@ function checkHtml(b) {
 function timedHtml(b) {
   const a = active;
   if (!b.started) {
-    const list = '<p class="small" style="margin-bottom:6px">' + esc(explainTimed(b)) + '</p>' + b.ex.map((id, i) => '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + id + '">' + esc(exName(id)) + '</button>' + swapBtn(b.orig[i], 'run', id, b.ex.filter((_, j) => j !== i)) + '</div>').join('');
+    const pt = prevTimedText(b.key);
+    const list = '<p class="small" style="margin-bottom:6px">' + esc(explainTimed(b)) + '</p>' + (pt ? '<p class="prev" style="margin-bottom:8px">' + esc(pt) + '</p>' : '') + b.ex.map((id, i) => '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + id + '">' + esc(exName(id)) + '</button>' + swapBtn(b.orig[i], 'run', id, b.ex.filter((_, j) => j !== i)) + '</div>').join('');
     return ['<h2 style="margin-bottom:6px">' + esc(b.title) + '</h2><div class="card flat">' + list + '</div><p class="tiny muted">De timer loopt vanzelf door alle oefeningen en rustpauzes. Je hoort een piep bij elke wissel.</p>', '<button class="btn primary block big" data-action="startBlock">Start ' + esc(b.title.toLowerCase()) + '</button><button class="btn block ghost sm" data-action="skipBlock" style="margin-top:8px">Overslaan</button>'];
   }
   const ph = b.phases[b.pi];
@@ -598,7 +636,7 @@ function timedHtml(b) {
 function runHtml(b) {
   const a = active;
   if (!b.started) {
-    const body = '<h2 style="margin-bottom:6px">Niveau ' + (b.lvl + 1) + '</h2><div class="card flat"><p>5 min inwandelen (warming-up)</p><p><b>' + esc(fmtRun(b)) + '</b></p><p>5 min uitwandelen</p></div>' +
+    const body = '<h2 style="margin-bottom:6px">Niveau ' + (b.lvl + 1) + '</h2><div class="card flat"><p>5 min inwandelen (warming-up)</p><p><b>' + esc(fmtRun(b)) + '</b></p><p>5 min uitwandelen</p></div>' + (prevRunText() ? '<p class="prev" style="margin-bottom:12px">' + esc(prevRunText()) + '</p>' : '') +
       '<div class="banner teal"><div class="ico">💡</div><p class="small">Je hoort een piep bij elke wissel en de telefoon trilt. Het scherm blijft aan zolang de app open is. Pijn? Wandel verder en geef het na afloop aan.</p></div>';
     return [body, '<button class="btn primary block big" data-action="startBlock">Start</button>'];
   }
@@ -623,6 +661,7 @@ function setsHtml(b) {
     body += '<div class="set-card ' + (complete ? 'complete' : '') + (isNext ? ' upnext' : '') + '" id="sc-' + ii + '"><div class="row" style="align-items:flex-start"><div class="grow"><b>' + esc(exName(it.id)) + '</b>' + (it.id !== it.orig ? ' <span class="tiny muted">(gewisseld)</span>' : '') +
       '<div class="small muted">Doel: ' + it.planned + ' × ' + (it.kind === 'time' ? it.target + ' s' : it.target) + (e.side ? ' per kant' : '') + (it.w ? ' · ' + num(it.w) + ' kg' : '') + '</div><div class="pill" style="margin-top:6px;display:inline-block">⏱ ' + it.rest + ' s rust tussen sets</div></div>' +
       '<div class="row" style="gap:6px">' + swapBtn(it.orig, 'run', it.id, b.items.filter((_, j) => j !== ii).map(x => x.id)) + '<button class="btn sm ghost" data-action="exInfo" data-id="' + it.id + '" aria-label="Uitleg">ⓘ</button></div></div>' +
+      (prevText(it.id) ? '<p class="prev">' + esc(prevText(it.id)) + '</p>' : '') +
       '<p class="explain">' + esc(explainItem(it)) + '</p>';
     if (e.db || e.dbOpt) {
       const opts = (e.dbOpt ? [0] : []).concat(avail());
@@ -631,9 +670,9 @@ function setsHtml(b) {
     it.sets.forEach((s, si) => {
       const holding = t && t.type === 'hold' && t.ii === ii && t.si === si;
       const holdBtn = it.kind === 'time' && !s.done ? '<button class="btn sm ' + (holding ? 'primary' : 'ghost') + '" data-action="' + (holding ? 'timerStop' : 'hold') + '" data-ii="' + ii + '" data-si="' + si + '" aria-label="Timer">' + (holding ? '■' : '▶') + '</button>' : '';
-      body += '<div class="set-row"><span class="lbl">Set ' + (si + 1) + '</span><div class="stepper"><button data-action="adj" data-ii="' + ii + '" data-si="' + si + '" data-d="-1">−</button><b>' + s.v + (it.kind === 'time' ? 's' : '') + '</b><button data-action="adj" data-ii="' + ii + '" data-si="' + si + '" data-d="1">+</button></div>' + holdBtn + '<button class="check ' + (s.done ? 'on' : '') + '" data-action="toggleSet" data-ii="' + ii + '" data-si="' + si + '" aria-label="Set afvinken">✓</button></div>';
+      body += '<div class="set-row"><span class="lbl">Set ' + (si + 1) + (si >= it.planned ? '<br><span class="tiny">extra</span>' : '') + '</span><div class="stepper"><button data-action="adj" data-ii="' + ii + '" data-si="' + si + '" data-d="-1">−</button><b>' + s.v + (it.kind === 'time' ? 's' : '') + '</b><button data-action="adj" data-ii="' + ii + '" data-si="' + si + '" data-d="1">+</button></div>' + holdBtn + '<button class="check ' + (s.done ? 'on' : '') + '" data-action="toggleSet" data-ii="' + ii + '" data-si="' + si + '" aria-label="Set afvinken">✓</button></div>';
     });
-    body += '</div>';
+    body += '<button class="btn sm ghost" data-action="addSet" data-ii="' + ii + '" style="margin-top:4px">+ Set</button></div>';
   });
   const allDone = b.items.every(it => it.sets.every(s => s.done));
   return [body, timerBar() + nextBlockBtn(allDone)];
@@ -806,6 +845,39 @@ function finalizeRecord() {
   return rec;
 }
 
+function findRecords(rec) {
+  if (rec.deload) return [];
+  const prev = realSessions();
+  const out = [];
+  for (const b of rec.blocks) {
+    if (b.type === 'sets') for (const it of b.items) {
+      if (!it.sets.length) continue;
+      const old = []; prev.forEach(s => s.blocks.forEach(x => { if (x.type === 'sets') x.items.forEach(y => { if (y.id === it.id && y.sets.length) old.push(y); }); }));
+      if (!old.length) continue;
+      const best = Math.max(...it.sets), was = Math.max(...old.map(y => Math.max(...y.sets)));
+      const unit = it.kind === 'time' ? ' s' : ' herhalingen';
+      if (best > was) out.push(exName(it.id) + ': ' + best + unit + (EX[it.id].side ? ' per kant' : '') + ' in één set (was ' + was + ')');
+      const wMax = Math.max(0, ...old.map(y => y.w || 0));
+      if (it.w && it.w > wMax) out.push(exName(it.id) + ': zwaarst ooit, ' + num(it.w) + ' kg');
+    }
+    if (b.type === 'timed' && (b.key === 'A1' || b.key === 'C1')) {
+      const mins = s2 => Math.round(s2.done * s2.n * s2.work / 6) / 10;
+      const old = []; prev.forEach(s => s.blocks.forEach(x => { if (x.type === 'timed' && x.key === b.key) old.push(mins(x)); }));
+      if (old.length && mins(b) > Math.max(...old)) out.push(b.title + ': meeste werktijd tot nu toe, ' + num(mins(b)) + ' min');
+    }
+    if (b.type === 'run') {
+      const old = []; prev.forEach(s => s.blocks.forEach(x => { if (x.type === 'run') old.push(x); }));
+      if (old.length) {
+        const longest = Math.max(0, ...old.filter(x => x.done).map(x => x.run));
+        if (b.done && b.run > longest) out.push('Langste stuk hardlopen tot nu toe: ' + fmtRunSec(b.run));
+        const most = Math.max(...old.map(x => x.runSec));
+        if (b.runSec > most) out.push('Meeste minuten hardgelopen in één training: ' + fmtMin(b.runSec));
+      }
+    }
+  }
+  if (rec.km) { const old = prev.filter(s => s.km).map(s => s.km); if (old.length && rec.km > Math.max(...old)) out.push('Verste afstand tot nu toe: ' + num(rec.km) + ' km'); }
+  return out;
+}
 function addSugg(s) {
   state.sugg = state.sugg.filter(x => !(x.t === s.t && x.key === s.key));
   s.id = uid(); state.sugg.push(s);
@@ -912,24 +984,29 @@ function lineChart(pts, opt = {}) {
   const idx = pts.length <= 3 ? pts.map((_, i) => i) : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
   idx.forEach(i => { g += '<text class="axis" x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="middle">' + esc(pts[i].x) + '</text>'; });
   const path = pts.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.y).toFixed(1)).join(' ');
-  const dots = pts.map((p, i) => '<circle class="pt" r="3.5" cx="' + x(i) + '" cy="' + y(p.y) + '"><title>' + esc(p.x + ': ' + num(p.y) + (opt.unit || '')) + '</title></circle>').join('');
+  const dots = pts.map((p, i) => '<circle class="pt" r="3.5" cx="' + x(i) + '" cy="' + y(p.y) + '"/>').join('');
   const lp = pts[pts.length - 1];
   const lab = '<text class="val" x="' + Math.min(x(pts.length - 1), W - R - 4) + '" y="' + (y(lp.y) - 9) + '" text-anchor="end">' + num(lp.y) + (opt.unit || '') + '</text>';
-  return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(opt.label || 'grafiek') + '">' + g + '<path class="ln" d="' + path + '"/>' + dots + lab + '</svg>';
+  const band = pts.length === 1 ? W - L - R : (W - L - R) / (pts.length - 1);
+  const hits = pts.map((p, i) => '<rect class="hit" x="' + (x(i) - band / 2) + '" y="0" width="' + band + '" height="' + H + '" data-tip="' + esc(p.x + ': ' + num(p.y) + (opt.unit || '')) + '" data-cx="' + (x(i) / W) + '" data-cy="' + (y(p.y) / H) + '"/>').join('');
+  return chartWrap('<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(opt.label || 'grafiek') + '">' + g + '<path class="ln" d="' + path + '"/>' + dots + lab + hits + '</svg>');
 }
+function chartWrap(svg) { return '<div class="chart-wrap">' + svg + '<div class="ctip" hidden></div></div>'; }
 function barChart(labels, vals, opt = {}) {
-  const W = 340, H = 170, L = 30, R = 8, T = 16, B = 26;
-  const max = Math.max(1, ...vals);
+  const W = 340, H = opt.h || 170, L = 30, R = 8, T = 16, B = 26;
+  const max = Math.max(1, ...vals, opt.goal || 0);
   const bw = (W - L - R) / vals.length;
   let g = '';
   for (let i = 0; i <= 2; i++) { const v = max * i / 2; const yy = T + (H - T - B) * (1 - v / max); g += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text class="axis" x="' + (L - 5) + '" y="' + (yy + 4) + '" text-anchor="end">' + Math.round(v) + '</text>'; }
   vals.forEach((v, i) => {
     const h = (H - T - B) * v / max; const xx = L + i * bw + bw * 0.18;
-    g += '<rect class="bar" rx="4" x="' + xx + '" y="' + (H - B - h) + '" width="' + bw * 0.64 + '" height="' + Math.max(h, v ? 2 : 0) + '"><title>' + esc(labels[i] + ': ' + v + (opt.unit || '')) + '</title></rect>';
-    if (v) g += '<text class="val" x="' + (xx + bw * 0.32) + '" y="' + (H - B - h - 4) + '" text-anchor="middle">' + v + '</text>';
-    if (i % 2 === (vals.length - 1) % 2) g += '<text class="axis" x="' + (xx + bw * 0.32) + '" y="' + (H - 7) + '" text-anchor="middle">' + esc(labels[i]) + '</text>';
+    g += '<rect class="bar' + (opt.cls ? ' ' + opt.cls : '') + (opt.goal && v >= opt.goal * (opt.goalHit || 1) ? ' hitgoal' : '') + '" rx="4" x="' + xx + '" y="' + (H - B - h) + '" width="' + bw * 0.64 + '" height="' + Math.max(h, v ? 2 : 0) + '"/>';
+    if (v && !opt.noVals) g += '<text class="val" x="' + (xx + bw * 0.32) + '" y="' + (H - B - h - 4) + '" text-anchor="middle">' + v + '</text>';
+    if (opt.allLabels || i % 2 === (vals.length - 1) % 2) g += '<text class="axis" x="' + (xx + bw * 0.32) + '" y="' + (H - 7) + '" text-anchor="middle">' + esc(labels[i]) + '</text>';
+    g += '<rect class="hit" x="' + (L + i * bw) + '" y="0" width="' + bw + '" height="' + H + '" data-tip="' + esc((opt.tips ? opt.tips[i] : labels[i]) + ': ' + num(v) + (opt.unit || '')) + '" data-cx="' + ((xx + bw * 0.32) / W) + '" data-cy="' + ((H - B - h) / H) + '"/>';
   });
-  return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(opt.label || 'grafiek') + '">' + g + '</svg>';
+  if (opt.goal) { const gy = T + (H - T - B) * (1 - opt.goal / max); g += '<line class="goal" x1="' + L + '" x2="' + (W - R) + '" y1="' + gy + '" y2="' + gy + '"/>'; }
+  return chartWrap('<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(opt.label || 'grafiek') + '">' + g + '</svg>');
 }
 
 function viewProgress() {
@@ -1100,6 +1177,21 @@ function viewFood() {
   return h;
 }
 
+function foodWeek(dk, en) {
+  const days = [];
+  for (let i = 6; i >= 0; i--) { const d = new Date(dk + 'T12:00:00'); d.setDate(d.getDate() - i); days.push(dateKey(d)); }
+  const tot = days.map(dayTotals);
+  const lab = days.map(k => new Date(k + 'T12:00:00').toLocaleDateString('nl-NL', { weekday: 'short' }).replace('.', ''));
+  const tips = days.map(k => fmtDate(k + 'T12:00:00', { weekday: 'short', day: 'numeric', month: 'short' }));
+  const filled = tot.filter(t => t.kcal || t.p);
+  const avg = filled.length ? { kcal: Math.round(filled.reduce((a, t) => a + t.kcal, 0) / filled.length), p: Math.round(filled.reduce((a, t) => a + t.p, 0) / filled.length) } : null;
+  let h = '<div class="section-title">Afgelopen 7 dagen</div><div class="card">';
+  if (!filled.length) return h + '<p class="small muted">Nog niets bijgehouden. Na een paar dagen zie je hier je week.</p></div>';
+  h += '<p class="small" style="font-weight:700">Calorieën</p>' + barChart(lab, tot.map(t => t.kcal), { unit: ' kcal', goal: en ? en.target : 0, goalHit: 99, h: 130, noVals: true, allLabels: true, tips, cls: 'kcal', label: 'Calorieën per dag' });
+  h += '<p class="small" style="font-weight:700;margin-top:6px">Eiwit</p>' + barChart(lab, tot.map(t => Math.round(t.p)), { unit: ' g', goal: en ? en.protein : 0, h: 130, noVals: true, allLabels: true, tips, label: 'Eiwit per dag' });
+  h += '<p class="tiny muted" style="margin-top:6px">Gemiddeld op dagen met invoer: <b>' + avg.kcal + ' kcal</b> · <b>' + avg.p + ' g eiwit</b>' + (en ? '. De stippellijn is je dagdoel' + ' (schatting); groen = eiwitdoel gehaald.' : '.') + ' Tik op een staaf voor de waarde.</p></div>';
+  return h;
+}
 function foodLog() {
   const dk = ui.foodDate || dateKey(); const isToday = dk === dateKey();
   const en = energy(); const tt = dayTotals(dk); const items = dayFood(dk);
@@ -1108,6 +1200,7 @@ function foodLog() {
   h += '<div class="card">' + meter(tt.kcal, en ? en.target : 0, 'kcal', 'Calorieën', 'var(--accent)') + meter(tt.p, en ? en.protein : 0, 'g', 'Eiwit', 'var(--teal)');
   h += en ? '<p class="tiny muted" style="margin-top:8px">Doelen zijn een schatting op basis van je gegevens bij Meer → Calorieën & eiwit.</p>' : '<p class="small muted" style="margin-top:8px">Vul bij <b>Meer → Calorieën & eiwit</b> je gegevens in voor een persoonlijke schatting van je dagelijkse behoefte.</p><button class="btn sm" data-action="goProfile" style="margin-top:8px">Gegevens invullen</button>';
   h += '</div>';
+  h += foodWeek(dk, en);
   h += '<div class="section-title">Snel toevoegen</div><div class="quick-grid">' + QUICK.map((q, i) => '<button class="quick" data-action="quickAdd" data-i="' + i + '"><b>' + esc(q.name) + '</b><span>' + q.p + ' g eiwit · ' + q.kcal + ' kcal</span></button>').join('') + '</div>';
   h += '<div class="section-title">Zelf toevoegen</div><div class="card"><label class="field"><span>Wat</span><input class="input" id="fName" placeholder="bijv. Tosti ham-kaas"></label><div class="row"><label class="field grow"><span>Eiwit (g)</span><input class="input" id="fP" inputmode="decimal" placeholder="0"></label><label class="field grow"><span>Kcal</span><input class="input" id="fK" inputmode="numeric" placeholder="0"></label></div><button class="btn primary block" data-action="customAdd">Toevoegen</button><p class="tiny muted" style="margin-top:8px">Tip: op de verpakking staat eiwit en energie (kcal) per 100 g.</p></div>';
   h += '<div class="section-title">Gegeten</div>';
@@ -1119,7 +1212,7 @@ function viewMore() {
   setTitle('Meer');
   const s = state.settings; const pr = state.profile;
   const co = cloudOn();
-  let h = updateBanner() + cloudCard() + '<div class="section-title">' + (co ? 'Extra back-up' : 'Back-up') + '</div><div class="card">';
+  let h = updateBanner() + cloudCard() + '<div class="section-title" id="backupSec">' + (co ? 'Extra back-up' : 'Back-up') + '</div><div class="card">';
   h += '<p class="small muted" style="margin-bottom:12px">' + (co ? 'Je gegevens worden automatisch in de cloud opgeslagen. Wil je daarnaast een eigen kopie, maak dan af en toe een extra back-up. ' : 'Je gegevens staan alleen op deze telefoon. Maak regelmatig een back-up, bijvoorbeeld naar Google Drive, of zet hierboven cloud-opslag aan. ') + (state.lastBackup ? 'Laatste back-up: <b>' + fmtDate(state.lastBackup, { day: 'numeric', month: 'long', year: 'numeric' }) + '</b>.' : '<b>Nog geen back-up gemaakt.</b>') + '</p>';
   h += '<button class="btn primary block" data-action="shareBackup">' + (co ? 'Extra back-up delen' : 'Back-up delen (bijv. Google Drive)') + '</button><div class="row" style="margin-top:8px"><button class="btn grow" data-action="downloadBackup">Downloaden</button><button class="btn grow" data-action="copyBackup">Kopieer als tekst</button></div>';
   h += '<p class="small" style="font-weight:700;margin:16px 0 8px">Terugzetten</p><div class="row"><button class="btn grow ghost" data-action="pickRestore">Kies back-upbestand</button><button class="btn grow ghost" data-action="pasteRestore">Plak tekst</button></div></div>';
@@ -1162,7 +1255,7 @@ function viewMore() {
   h += '</div>';
 
   h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account. ' + (co ? 'Je gegevens staan op dit apparaat en als kopie in de cloud (Firebase van Google), alleen te vinden met je persoonlijke code. Een lopende training wordt niet naar de cloud gestuurd.' : 'Zonder cloud-opslag blijft alles wat je invoert in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.') + '</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
-  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.3</p>';
+  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.5</p>';
   return h;
 }
 function toggleRow(t, sub, key, on) {
@@ -1224,6 +1317,14 @@ async function copyBackup() {
 }
 
 function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+function badBlock(b) {
+  if (!isObj(b) || typeof b.type !== 'string') return true;
+  const n = v => typeof v === 'number' && isFinite(v);
+  if (b.type === 'sets') return !Array.isArray(b.items) || b.items.some(it => !isObj(it) || !EX[it.id] || !Array.isArray(it.sets) || !it.sets.every(n));
+  if (b.type === 'timed') return !n(b.done) || !n(b.rounds) || !n(b.work) || (b.ex != null && (!Array.isArray(b.ex) || !b.ex.every(id => EX[id])));
+  if (b.type === 'run') return !n(b.done) || !n(b.reps) || !n(b.runSec) || !n(b.lvl);
+  return false;
+}
 function parseBackup(text) {
   let o;
   try { o = JSON.parse(text); } catch (e) { return { err: 'Dit bestand is geen Fit worden back-up (geen leesbare tekst).' }; }
@@ -1232,8 +1333,9 @@ function parseBackup(text) {
   const d = o.data;
   if (!isObj(d.settings) || !Array.isArray(d.sessions) || !isObj(d.prog)) return { err: 'De back-up is onvolledig of beschadigd.' };
   if ((d.prog.timed && !isObj(d.prog.timed)) || (d.prog.ex && !isObj(d.prog.ex))) return { err: 'De voortgang in de back-up is beschadigd.' };
-  const badS = d.sessions.filter(x => !isObj(x) || !x.id || typeof x.date !== 'string' || isNaN(Date.parse(x.date)) || !Array.isArray(x.blocks) || typeof x.dur !== 'number');
-  if (badS.length) return { err: 'De back-up bevat ' + badS.length + ' beschadigde training(en).' };
+  const badS = d.sessions.filter(x => !isObj(x) || !x.id || typeof x.date !== 'string' || isNaN(Date.parse(x.date)) || !Array.isArray(x.blocks) || typeof x.dur !== 'number' || !(WORKOUTS[x.wid] || x.wid === 'free') || x.blocks.some(badBlock));
+  if (badS.length) return { err: 'De back-up bevat ' + badS.length + ' beschadigde training(en) of onbekende oefeningen.' };
+  if (d.food && isObj(d.food) && Object.values(d.food).some(day => !Array.isArray(day) || day.some(x => !isObj(x) || typeof x.kcal !== 'number' || typeof x.p !== 'number'))) return { err: 'De voedingsgegevens in de back-up zijn beschadigd.' };
   if (d.weights && (!Array.isArray(d.weights) || d.weights.some(w => !isObj(w) || typeof w.kg !== 'number' || typeof w.date !== 'string'))) return { err: 'De gewichtsmetingen in de back-up zijn beschadigd.' };
   if (d.food && !isObj(d.food)) return { err: 'De voedingsgegevens in de back-up zijn beschadigd.' };
   return { data: d, exported: o.exported };
@@ -1335,8 +1437,17 @@ function setCloudStatus(st) {
   const el = $('#syncStatus'); if (!el) return;
   const map = { saved: ['Opgeslagen', 'ok'], saving: ['Opslaan…', 'busy'], offline: ['Cloud offline', 'off'], denied: ['Controleer de Firestore-regels', 'err'], error: ['Opslaan mislukt', 'err'], toobig: ['Te groot voor cloud', 'err'] };
   const m = map[st];
-  if (!cloudOn() || !m) { el.hidden = true; return; }
+  if (!cloudOn()) { backupChip(el); return; }
+  if (!m) { el.hidden = true; return; }
   el.hidden = false; el.textContent = m[0]; el.className = 'sync ' + m[1];
+}
+function backupChip(el) {
+  const has = state.sessions.length || state.weights.length || Object.keys(state.food).length;
+  if (!state.settings.onboarded || !has) { el.hidden = true; return; }
+  const d = state.lastBackup ? daysSince(state.lastBackup) : null;
+  el.hidden = false;
+  el.textContent = d === null ? 'Geen back-up' : d === 0 ? 'Back-up vandaag' : 'Back-up ' + d + ' d geleden';
+  el.className = 'sync ' + (d === null || d >= 7 ? 'busy' : 'ok');
 }
 function cloudErr(e) {
   const c = e && e.code;
@@ -1345,8 +1456,17 @@ function cloudErr(e) {
   setCloudStatus('error'); return 'error';
 }
 
+function hashStr(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + ':' + str.length;
+}
+function stateHash() { return hashStr(JSON.stringify(state)); }
 function cloudTouch() {
-  if (!cloudOn()) return;
+  if (!cloudOn()) { setCloudStatus(cloud.status); return; }
+  const h = stateHash();
+  if (h === cloud.meta.hash) return;
+  cloud.meta.hash = h;
   cloud.meta.localUpdatedAt = Date.now();
   cloud.meta.dirty = true;
   saveCloudMeta();
@@ -1384,13 +1504,13 @@ function parseRemote(snap) {
   try { raw = JSON.parse(d.data || 'null'); } catch (e) {}
   const r = parseBackup(JSON.stringify({ app: 'fitworden', version: BACKUP_VERSION, data: raw }));
   if (r.err) throw Object.assign(new Error(r.err), { code: 'baddata' });
-  return { data: r.data, updatedAt: +d.updatedAt || 0 };
+  return { data: r.data, updatedAt: +d.updatedAt || 0, hash: hashStr(d.data || '') };
 }
 function applyRemote(r) {
   state = migrate(r.data);
   state.settings.onboarded = true;
   saveLocal();
-  cloud.meta.localUpdatedAt = r.updatedAt; cloud.meta.dirty = false; saveCloudMeta();
+  cloud.meta.localUpdatedAt = r.updatedAt; cloud.meta.dirty = false; cloud.meta.hash = stateHash(); saveCloudMeta();
   applyTheme();
   if ($('#modal').hidden) render(); else ui.needRender = true;
 }
@@ -1404,6 +1524,7 @@ async function pullNow(force) {
     const snap = await withTimeout(docRef(cloud.meta.code).get(), 15000);
     if (!snap.exists) { cloud.meta.dirty = true; saveCloudMeta(); schedulePush(0); return; }
     const r = parseRemote(snap);
+    if (r.hash === stateHash()) { cloud.meta.dirty = false; cloud.meta.hash = r.hash; cloud.meta.localUpdatedAt = Math.max(cloud.meta.localUpdatedAt, r.updatedAt); saveCloudMeta(); setCloudStatus('saved'); return; }
     if (r.updatedAt > cloud.meta.localUpdatedAt) { applyRemote(r); setCloudStatus('saved'); toast('Nieuwste gegevens uit de cloud geladen'); }
     else if (cloud.meta.dirty || r.updatedAt < cloud.meta.localUpdatedAt) { cloud.meta.dirty = true; saveCloudMeta(); schedulePush(0); }
     else setCloudStatus('saved');
@@ -1437,7 +1558,7 @@ function cloudCard() {
 }
 
 async function cloudEnable(code) {
-  cloud.meta = { enabled: true, code, localUpdatedAt: Date.now(), dirty: true };
+  cloud.meta = { enabled: true, code, localUpdatedAt: Date.now(), dirty: true, hash: stateHash() };
   saveCloudMeta(); ui.showCode = false;
   render(); setCloudStatus('saving');
   await pushNow();
@@ -1566,11 +1687,13 @@ const ACT = {
   saveSession: () => {
     keepFinInputs();
     const rec = finalizeRecord();
+    const recs = findRecords(rec);
     state.sessions.push(rec);
     const r = rotation(); if (r[state.rot % r.length] === rec.wid) state.rot++;
     const sug = evaluate(rec);
     active = null; saveActive(); save(); closeRunner(); ui.tab = 'home'; render();
     let h = '<div style="text-align:center;font-size:48px">🎉</div><h2 style="text-align:center">Training opgeslagen</h2><p class="muted" style="text-align:center">' + esc(rec.name) + ' · ' + fmtMin(rec.dur) + (rec.deload ? ' · rustweek' : '') + '</p>';
+    if (recs.length) h += '<div class="records"><b>🏆 Nieuw record' + (recs.length > 1 ? 's' : '') + '</b><ul>' + recs.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>';
     if (rec.pain) h += '<div class="banner" style="margin-top:14px"><div class="ico">⚠️</div><p class="small">Je gaf pijn of klachten aan. Neem de tijd om te herstellen en sla bij aanhoudende pijn de oefening over, wissel hem voor een alternatief of vraag advies.</p></div>';
     if (sug.length) h += '<div class="section-title">Voorstel</div>' + sug.map(s => suggCard(state.sugg.find(x => x.key === s.key && x.t === s.t))).join('');
     else h += '<p class="small muted" style="text-align:center;margin-top:12px">Volgende keer: ' + esc(WORKOUTS[nextWid()].name) + '</p>';
@@ -1593,6 +1716,11 @@ const ACT = {
     else if (active.timer && active.timer.type !== 'hold') active.timer = null;
     saveActive(); renderRunner();
     if (active.timer && active.timer.type === 'trans') scrollToCard(active.timer.ii);
+  },
+  addSet: el => {
+    const b = curBlock(); const it = b.items[+el.dataset.ii]; const last = it.sets[it.sets.length - 1];
+    it.sets.push({ v: last ? last.v : it.target, done: false });
+    saveActive(); renderRunner(); toast('Extra set toegevoegd');
   },
   hold: el => { ensureAudio(); startHold(+el.dataset.ii, +el.dataset.si); saveActive(); renderRunner(); },
   itemPlay: el => { ensureAudio(); startItemTimer(+el.dataset.ii, false); saveActive(); renderRunner(); },
@@ -1662,11 +1790,17 @@ const ACT = {
   setTheme: el => { state.settings.theme = el.dataset.v; save(); applyTheme(); render(); },
   setGoal: el => { state.settings.weekGoal = +el.dataset.v; save(); render(); },
   install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); try { await deferredInstall.userChoice; } catch (e) {} deferredInstall = null; render(); },
-  wipeAsk: () => confirmSheet('Alle gegevens wissen?', 'Al je trainingen, voortgang, voeding en instellingen worden van dit apparaat verwijderd en de koppeling met de cloud gaat uit. ' + (cloud.meta.code ? 'De gegevens in de cloud blijven bewaard: met je code kun je ze later terughalen. Heb je de code niet bewaard, noteer hem dan eerst.' : 'Maak eerst een back-up als je die wilt bewaren.'), 'Alles wissen', () => {
-    clearTimeout(cloud.timer); localStorage.removeItem(KEY); localStorage.removeItem(AKEY); localStorage.removeItem(CKEY);
-    cloud.meta = loadCloudMeta(); setCloudStatus('idle'); state = defaultState(); active = null; applyTheme(); ui.tab = 'home'; render();
-  }, true),
-  goCloud: () => { ui.tab = 'more'; render(); const el = $('#cloudSec'); el && el.scrollIntoView(); },
+  wipeAsk: () => {
+    confirmSheet.cb = () => {
+      clearTimeout(cloud.timer); localStorage.removeItem(KEY); localStorage.removeItem(AKEY); localStorage.removeItem(CKEY);
+      cloud.meta = loadCloudMeta(); setCloudStatus('idle'); state = defaultState(); active = null; applyTheme(); ui.tab = 'home'; render();
+    };
+    const c = cloud.meta.code;
+    openSheet('<h2>Alle gegevens wissen?</h2><p class="muted">Al je trainingen, voortgang, voeding en instellingen worden van dit apparaat verwijderd' + (c ? ' en de koppeling met de cloud gaat uit.' : '. Maak eerst een back-up als je die wilt bewaren.') + '</p>' +
+      (c ? '<div class="codebox"><span class="tiny muted">Jouw code</span><b>' + esc(fmtCode(c)) + '</b><div class="row" style="margin-top:8px"><button class="btn sm ghost grow" data-action="cloudCopy">Kopieer code</button></div></div><p class="small" style="margin-top:10px"><b>Noteer je code</b>, anders kun je je cloudgegevens niet terughalen. De gegevens in de cloud blijven bewaard; met deze code haal je ze later terug.</p>' : '') +
+      '<div class="actions"><button class="btn block danger" data-action="confirmOk">Alles wissen</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>');
+  },
+  goCloud: () => { ui.tab = 'more'; render(); const el = $(cloudOn() ? '#cloudSec' : '#backupSec'); el && el.scrollIntoView(); },
   cloudEnable: () => cloudEnable(newCode()),
   cloudResume: () => cloudResume(),
   cloudShow: () => { ui.showCode = !ui.showCode; render(); const el = $('#cloudSec'); el && el.scrollIntoView(); },
@@ -1715,8 +1849,9 @@ const ACT = {
     const rec = { id: uid(), date, wid: 'free', name: what, dur: min * 60, rating: 0, pain: false, note: '', blocks: [{ type: 'free', what: what + ' · ' + min + ' min' + (km > 0 ? ' · ' + num(km) + ' km' : '') }] };
     if (state.deload.active) rec.deload = true;
     if (km > 0) rec.km = Math.round(km * 100) / 100;
+    const recs = findRecords(rec);
     state.sessions.push(rec); state.sessions.sort((a, b) => a.date.localeCompare(b.date));
-    save(); closeSheet(); render(); toast('Activiteit opgeslagen');
+    save(); closeSheet(); render(); toast(recs.length ? '🏆 ' + recs[0] : 'Activiteit opgeslagen', recs.length ? 3800 : 2600);
   }
 };
 
@@ -1726,6 +1861,18 @@ function keepFinInputs() {
   const k = $('#finKm'); if (k) active.fin.km = k.value;
 }
 
+function showTip(r) {
+  const w = r.closest('.chart-wrap'); if (!w) return;
+  const tip = w.querySelector('.ctip'); const box = w.querySelector('svg').getBoundingClientRect();
+  document.querySelectorAll('.ctip').forEach(t => { if (t !== tip) t.hidden = true; });
+  tip.textContent = r.dataset.tip; tip.hidden = false;
+  tip.style.left = clamp(+r.dataset.cx * box.width, 40, box.width - 40) + 'px';
+  tip.style.top = (+r.dataset.cy * box.height) + 'px';
+}
+document.addEventListener('pointerdown', ev => {
+  const r = ev.target.closest && ev.target.closest('.hit');
+  if (r) showTip(r); else document.querySelectorAll('.ctip').forEach(t => { t.hidden = true; });
+});
 document.addEventListener('click', ev => {
   const tab = ev.target.closest('.tabbar button');
   if (tab) { ui.tab = tab.dataset.tab; if (tab.dataset.tab === 'food') ui.foodDate = null; render(); window.scrollTo(0, 0); return; }
@@ -1804,4 +1951,5 @@ saveLocal();
 if (active) saveActive();
 if (state.settings.onboarded) requestPersist();
 render();
-if (cloudOn()) { setCloudStatus(cloud.meta.dirty ? 'saving' : 'saved'); pullNow(true); }
+if (cloudOn() && !cloud.meta.hash) { cloud.meta.hash = stateHash(); saveCloudMeta(); }
+if (cloudOn()) { setCloudStatus(cloud.meta.dirty ? 'saving' : 'saved'); pullNow(true); } else setCloudStatus('idle');
