@@ -11,10 +11,10 @@ const RATINGS = [
   { v: 4, t: 'Te zwaar', s: 'Moest inhouden' }
 ];
 const LIB = [
-  ['Conditie', ['mars', 'stepjack', 'boksen', 'skater', 'kniecross', 'hakbil', 'squatreach', 'shuffle', 'zijtik', 'trede', 'voetjes']],
-  ['Benen & billen', ['squat', 'stoelsquat', 'sumo', 'lunge', 'splitsquat', 'stepup', 'bridge', 'singlebridge', 'kickback', 'kuit', 'zijbeen', 'zijstap', 'clam', 'wallsit']],
-  ['Armen, schouders & rug', ['curl', 'hammer', 'press', 'lateral', 'frontraise', 'triceps', 'tricepsligg', 'pullover', 'floorpress', 'wallangel']],
-  ['Buik & romp', ['deadbug', 'liggendmars', 'heeltaps', 'zijcrunch', 'zijplank']],
+  ['Conditie', ['mars', 'stepjack', 'boksen', 'uppercut', 'dbpunch', 'zwemslag', 'skater', 'kniecross', 'twist', 'frontkick', 'hakbil', 'hieltik', 'voorteentik', 'knieheffen', 'squatreach', 'squatboks', 'shuffle', 'grapevine', 'zijtik', 'trede', 'voetjes']],
+  ['Benen & billen', ['squat', 'stoelsquat', 'pulssquat', 'sumo', 'zijlunge', 'lunge', 'splitsquat', 'curtsy', 'stepup', 'bridge', 'singlebridge', 'bilbrugmars', 'rdl', 'kickback', 'kuit', 'kuit1', 'zijbeen', 'zijstap', 'clam', 'wallsit']],
+  ['Armen, schouders & rug', ['curl', 'hammer', 'concurl', 'press', 'arnold', 'lateral', 'frontraise', 'halo', 'reversefly', 'triceps', 'tricepsligg', 'trikickback', 'pullover', 'floorpress', 'borstfly', 'wallangel', 'handdoekrek']],
+  ['Buik & romp', ['deadbug', 'liggendmars', 'crunch', 'reversecrunch', 'fietsen', 'tenentik', 'heeltaps', 'zijcrunch', 'staandevogel', 'zijbuig', 'houthakker', 'plankknie', 'zijplank']],
   ['Warming-up & afkoelen', ['armcirkel', 'heupcirkel', 'beenzwaai', 'uitlopen', 'str_quad', 'str_ham', 'str_kuit', 'str_bil', 'str_schouder', 'adem']]
 ];
 const TIMED_START = { A1: 1, C1: 0, B2: 0 };
@@ -1255,7 +1255,7 @@ function viewMore() {
   h += '</div>';
 
   h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account. ' + (co ? 'Je gegevens staan op dit apparaat en als kopie in de cloud (Firebase van Google), alleen te vinden met je persoonlijke code. Een lopende training wordt niet naar de cloud gestuurd.' : 'Zonder cloud-opslag blijft alles wat je invoert in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.') + '</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
-  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.5</p>';
+  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.6</p>';
   return h;
 }
 function toggleRow(t, sub, key, on) {

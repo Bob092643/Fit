@@ -1,4 +1,4 @@
-const CACHE = 'fitworden-v6';
+const CACHE = 'fitworden-v7';
 const SDK = 'fitworden-sdk';
 const ASSETS = ['./', 'index.html', 'styles.css', 'data.js', 'app.js', 'firebase-config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 const INDEX = new URL('index.html', self.registration.scope).href;
