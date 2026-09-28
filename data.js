@@ -314,9 +314,9 @@ const MEALS = [
 const ALTS = {
   mars: [['hakbil', 'Zelfde intensiteit, andere spieren'], ['voetjes', 'Sneller, kleine pasjes'], ['trede', 'Als je een trap hebt']],
   stepjack: [['mars', 'Nog rustiger voor knieën en heupen'], ['zijtik', 'Zonder armen boven het hoofd'], ['shuffle', 'Meer benen en billen']],
-  boksen: [['kniecross', 'Meer buik, minder schouders'], ['mars', 'Als je schouders moe zijn'], ['stepjack', 'Hele lichaam']],
+  boksen: [['zijcrunch', 'Meer buik, minder schouders'], ['hakbil', 'Als je schouders moe zijn'], ['voetjes', 'Voeten actief, armen rust']],
   skater: [['shuffle', 'Minder draaien in de knie'], ['zijtik', 'Rustigere variant'], ['stepjack', 'Minder balans nodig']],
-  kniecross: [['zijcrunch', 'Meer zijkant van de buik'], ['mars', 'Rustiger'], ['boksen', 'Meer bovenlichaam']],
+  kniecross: [['zijcrunch', 'Meer zijkant van de buik'], ['hakbil', 'Rustiger'], ['zijtik', 'Zijwaarts, zonder draaien']],
   hakbil: [['mars', 'Rustiger'], ['voetjes', 'Sneller'], ['zijtik', 'Zijwaarts']],
   squatreach: [['stoelsquat', 'Kniesparend, met een stoel'], ['trede', 'Als je een trap hebt'], ['mars', 'Geen squat, wel cardio']],
   shuffle: [['skater', 'Meer billen'], ['zijtik', 'Rustiger'], ['stepjack', 'Minder zijwaarts']],

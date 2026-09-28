@@ -70,7 +70,10 @@ function convertActive(a) {
   a.blocks = a.blocks.map(b => {
     if (b.type === 'flow') return { type: 'check', title: b.title, items: b.phases.filter(p => p.k === 'work').map(p => ({ ex: p.ex, sec: p.sec, done: !!b.done })), done: !!b.done, started: true };
     if (b.type === 'sets') { b.trans = b.trans || 90; b.items.forEach(it => { it.orig = it.orig || it.id; it.rest = it.rest || b.rest || 60; }); }
-    if (b.type === 'timed' && !b.orig) b.orig = b.ex.slice();
+    if (b.type === 'timed') {
+      if (!b.orig) b.orig = b.ex.slice();
+      b.phases.forEach(p => { if (p.slot == null) { const i = b.ex.indexOf(p.ex); p.slot = i < 0 ? 0 : i; } });
+    }
     return b;
   });
   delete a.restEnd; delete a.hold;
@@ -145,8 +148,8 @@ function adjRounds(r, len) { return len === 'kort' ? Math.max(1, r - 1) : len ==
 function adjSets(s, len) { return len === 'kort' ? Math.max(1, s - 1) : len === 'lang' ? Math.min(4, s + 1) : s; }
 function includeBlock(b, len) { return !(b.optional && len === 'kort'); }
 
-function itemPlan(orig, len, rest, dl) {
-  const id = resolve(orig); const p = getEx(id); const e = EX[id]; const d = EX_DEFAULTS[id] || {};
+function itemPlan(orig, len, rest, dl, forced) {
+  const id = forced || resolve(orig); const p = getEx(id); const e = EX[id]; const d = EX_DEFAULTS[id] || {};
   let S = adjSets(p.sets, len);
   let target = e.kind === 'time' ? p.sec : p.reps;
   let w = p.w || 0;
@@ -159,6 +162,12 @@ function itemPlan(orig, len, rest, dl) {
   return { id, orig, kind: e.kind, target, w, planned: S, rest: d.rest || rest };
 }
 
+function resolveSlots(orig) {
+  const res = orig.map(resolve);
+  res.forEach((r, i) => { if (r !== orig[i] && res.some((x, j) => j !== i && x === r)) res[i] = orig[i]; });
+  return res;
+}
+
 function planBlocks(wid, len) {
   const dl = state.deload.active;
   return WORKOUTS[wid].blocks.filter(b => includeBlock(b, len)).map(b => {
@@ -167,9 +176,9 @@ function planBlocks(wid, len) {
       const p = getTimed(b.key); const lad = ladderFor(b.key);
       const lvl = dl ? Math.max(0, p.lvl - 2) : p.lvl; const l = lad[lvl];
       let R = adjRounds(l.rounds, len); if (dl) R = Math.min(R, 2);
-      return { type: 'timed', title: b.title, key: b.key, lvl, work: l.work, rest: l.rest, rounds: R, roundRest: b.roundRest, orig: b.ex.slice(), ex: b.ex.map(resolve) };
+      return { type: 'timed', title: b.title, key: b.key, lvl, work: l.work, rest: l.rest, rounds: R, roundRest: b.roundRest, orig: b.ex.slice(), ex: resolveSlots(b.ex) };
     }
-    if (b.type === 'sets') return { type: 'sets', title: b.title, rest: b.rest, trans: b.trans || 90, items: b.ex.map(o => itemPlan(o, len, b.rest, dl)) };
+    if (b.type === 'sets') { const ids = resolveSlots(b.ex); return { type: 'sets', title: b.title, rest: b.rest, trans: b.trans || 90, items: b.ex.map((o, i) => itemPlan(o, len, b.rest, dl, ids[i])) }; }
     if (b.type === 'run') {
       const lvl = dl ? Math.max(0, state.prog.run.lvl - 1) : state.prog.run.lvl;
       return Object.assign({ type: 'run', lvl }, RUN_LEVELS[lvl]);
@@ -193,13 +202,13 @@ function estimate(wid, len) {
 }
 
 function timedPhases(b) {
-  const phases = [{ k: 'prep', sec: 10, ex: b.ex[0] }];
+  const phases = [{ k: 'prep', sec: 10, ex: b.ex[0], slot: 0 }];
   for (let r = 1; r <= b.rounds; r++) {
     b.ex.forEach((id, i) => {
-      phases.push({ k: 'work', sec: b.work, ex: id, r, last: i === b.ex.length - 1 });
-      if (i < b.ex.length - 1) phases.push({ k: 'rest', sec: b.rest, ex: b.ex[i + 1], r });
+      phases.push({ k: 'work', sec: b.work, ex: id, slot: i, r, last: i === b.ex.length - 1, side: !!EX[id].side });
+      if (i < b.ex.length - 1) phases.push({ k: 'rest', sec: b.rest, ex: b.ex[i + 1], slot: i + 1, r });
     });
-    if (r < b.rounds) phases.push({ k: 'rest', sec: b.roundRest, ex: b.ex[0], r, label: 'Rondepauze' });
+    if (r < b.rounds) phases.push({ k: 'rest', sec: b.roundRest, ex: b.ex[0], slot: 0, r, label: 'Rondepauze' });
   }
   return phases;
 }
@@ -343,7 +352,7 @@ function deloadPill() { return '<span class="pill" style="background:var(--plum-
 function viewHome() {
   checkDeloadEnd();
   setTitle(state.settings.name ? 'Hoi ' + state.settings.name : 'Vandaag');
-  let h = '';
+  let h = updateBanner();
   if (active) {
     h += '<div class="banner teal"><div class="ico">⏱️</div><div class="grow"><b>Training bezig: ' + esc(WORKOUTS[active.wid].name) + '</b><p class="small muted">Je kunt verdergaan waar je gebleven was.</p><div class="row" style="margin-top:10px"><button class="btn teal sm" data-action="resume">Doorgaan</button><button class="btn sm ghost" data-action="discardActive">Weggooien</button></div></div></div>';
   }
@@ -387,6 +396,10 @@ function viewHome() {
   return h;
 }
 
+function updateBanner() {
+  return ui.updateReady ? '<div class="banner teal"><div class="ico">✨</div><div class="grow"><b>Nieuwe versie klaar</b><p class="small muted">Je gegevens blijven gewoon staan.</p><div class="row" style="margin-top:10px"><button class="btn teal sm" data-action="applyUpdate">Nu bijwerken</button></div></div></div>' : '';
+}
+
 function suggCard(s) {
   if (!s) return '';
   return '<div class="card sugg"><b>' + esc(s.title) + '</b><p class="small" style="margin-top:4px">' + esc(s.text) + '</p><p class="tiny muted" style="margin-top:4px">' + esc(s.why) + '</p>' +
@@ -423,18 +436,19 @@ function exInfoHtml(id) {
     '<div class="actions"><a class="btn block primary" href="' + videoUrl(id) + '" target="_blank" rel="noopener">▶ Video bekijken (YouTube)</a><button class="btn block ghost" data-action="closeSheet">Sluiten</button></div>';
 }
 
-function swapBtn(orig, ctx) {
+function swapBtn(orig, ctx, cur, taken) {
   if (!ALTS[orig]) return '';
-  return '<button class="btn sm ghost swapbtn" data-action="swapOpen" data-orig="' + orig + '" data-ctx="' + ctx + '">⇄ Wissel</button>';
+  return '<button class="btn sm ghost swapbtn" data-action="swapOpen" data-orig="' + orig + '" data-ctx="' + ctx + '" data-cur="' + (cur || orig) + '" data-taken="' + (taken || []).join(',') + '">⇄ Wissel</button>';
 }
-function swapHtml(orig, ctx) {
-  const cur = resolve(orig);
+function swapHtml(orig, ctx, cur, taken) {
+  cur = cur || resolve(orig); taken = taken || [];
   const opts = [[orig, 'Oorspronkelijke oefening']].concat(ALTS[orig] || []);
   return '<h2>Oefening wisselen</h2><p class="small muted" style="margin-bottom:12px">Kies een alternatief, bijvoorbeeld als iets pijn doet of je materiaal mist. Je keuze wordt bewaard voor volgende trainingen en elke oefening houdt haar eigen voortgang bij. Terugzetten kan hier of bij Meer.</p>' +
     opts.map(([id, note]) => {
       const p = EX_DEFAULTS[id] ? getEx(id) : null;
-      return '<div class="card flat swap-opt ' + (id === cur ? 'cur' : '') + '"><div class="row"><div class="grow"><b>' + esc(exName(id)) + '</b>' + (id === cur ? ' <span class="pill" style="background:var(--teal-soft);color:var(--teal)">huidig</span>' : '') + '<p class="small muted">' + esc(note) + ' · ' + esc(EX[id].muscles) + '</p>' + (p ? '<p class="tiny muted">Voortgang: ' + esc(fmtEx(id, p)) + '</p>' : '') + '</div><button class="btn sm ghost" data-action="exInfo2" data-id="' + id + '" aria-label="Uitleg">ⓘ</button></div>' +
-        (id === cur ? '' : '<button class="btn sm block" style="margin-top:10px" data-action="doSwap" data-orig="' + orig + '" data-to="' + id + '" data-ctx="' + ctx + '">Kies deze</button>') + '</div>';
+      const busy = id !== cur && taken.includes(id);
+      return '<div class="card flat swap-opt ' + (id === cur ? 'cur' : '') + (busy ? ' busy' : '') + '"><div class="row"><div class="grow"><b>' + esc(exName(id)) + '</b>' + (id === cur ? ' <span class="pill" style="background:var(--teal-soft);color:var(--teal)">huidig</span>' : '') + '<p class="small muted">' + esc(note) + ' · ' + esc(EX[id].muscles) + '</p>' + (p ? '<p class="tiny muted">Voortgang: ' + esc(fmtEx(id, p)) + '</p>' : '') + '</div><button class="btn sm ghost" data-action="exInfo2" data-id="' + id + '" aria-label="Uitleg">ⓘ</button></div>' +
+        (id === cur ? '' : busy ? '<p class="tiny muted" style="margin-top:8px">Zit al in dit onderdeel, dus niet te kiezen.</p>' : '<button class="btn sm block" style="margin-top:10px" data-action="doSwap" data-orig="' + orig + '" data-to="' + id + '" data-ctx="' + ctx + '">Kies deze</button>') + '</div>';
     }).join('') +
     '<div class="actions"><button class="btn block ghost" data-action="swapBack" data-ctx="' + ctx + '">Terug</button></div>';
 }
@@ -445,7 +459,7 @@ function explainTimed(b) {
 function explainItem(it) {
   const e = EX[it.id]; const S = it.planned || it.sets.length;
   const kant = e.side ? ' per kant' : '';
-  const what = it.kind === 'time' ? it.target + ' s vasthouden' + kant : it.target + ' herhalingen' + kant + (it.w ? ' met ' + num(it.w) + ' kg' : '');
+  const what = it.kind === 'time' ? it.target + ' s vasthouden' + (e.side ? ' per kant (▶ telt beide kanten af)' : '') : it.target + ' herhalingen' + kant + (it.w ? ' met ' + num(it.w) + ' kg' : '');
   return exName(it.id) + ' ' + S + ' × ' + (it.kind === 'time' ? it.target + ' s' : it.target) + ' = ' + what + ', ' + it.rest + ' s rust, ' + word(S) + ' keer.';
 }
 
@@ -459,10 +473,10 @@ function previewHtml(wid, len) {
     if (b.type === 'check') h += '<div class="card flat"><div class="row between"><h3>' + esc(b.title) + '</h3><span class="pill">± ' + fmtMin(b.items.reduce((s, i) => s + i.sec, 0)) + '</span></div><p class="small muted">' + b.items.map(i => esc(exName(i.ex))).join(' · ') + '</p></div>';
     if (b.type === 'timed') {
       h += '<div class="card flat"><div class="row between"><h3>' + esc(b.title) + '</h3><span class="pill">' + b.work + '/' + b.rest + ' s · ' + b.rounds + ' rondes</span></div><p class="tiny muted" style="margin:4px 0">' + esc(explainTimed(b)) + '</p>' +
-        b.ex.map((id, i) => '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + id + '">' + esc(exName(id)) + (id !== b.orig[i] ? ' <span class="tiny muted">(gewisseld)</span>' : '') + '</button>' + swapBtn(b.orig[i], 'preview') + '</div>').join('') + '</div>';
+        b.ex.map((id, i) => '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + id + '">' + esc(exName(id)) + (id !== b.orig[i] ? ' <span class="tiny muted">(gewisseld)</span>' : '') + '</button>' + swapBtn(b.orig[i], 'preview', id, b.ex.filter((_, j) => j !== i)) + '</div>').join('') + '</div>';
     }
     if (b.type === 'sets') {
-      h += '<div class="card flat"><div class="row between"><h3>' + esc(b.title) + '</h3><span class="pill">rust per oefening</span></div>' + b.items.map(it => { const p = { sets: it.planned, reps: it.target, sec: it.target, w: it.w }; return '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + it.id + '">' + esc(exName(it.id)) + (it.id !== it.orig ? ' <span class="tiny muted">(gewisseld)</span>' : '') + '<div class="meta">' + esc(fmtEx(it.id, p)) + ' · ' + it.rest + ' s rust</div></button>' + swapBtn(it.orig, 'preview') + '</div>'; }).join('') +
+      h += '<div class="card flat"><div class="row between"><h3>' + esc(b.title) + '</h3><span class="pill">rust per oefening</span></div>' + b.items.map((it, ii) => { const p = { sets: it.planned, reps: it.target, sec: it.target, w: it.w }; return '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + it.id + '">' + esc(exName(it.id)) + (it.id !== it.orig ? ' <span class="tiny muted">(gewisseld)</span>' : '') + '<div class="meta">' + esc(fmtEx(it.id, p)) + ' · ' + it.rest + ' s rust</div></button>' + swapBtn(it.orig, 'preview', it.id, b.items.filter((_, j) => j !== ii).map(x => x.id)) + '</div>'; }).join('') +
         '<p class="tiny muted" style="margin-top:8px">Na de laatste set van een oefening heb je ± ' + fmtSecShort(b.trans) + ' om naar de volgende te gaan.</p></div>';
     }
     if (b.type === 'run') {
@@ -555,7 +569,7 @@ function checkHtml(b) {
 function timedHtml(b) {
   const a = active;
   if (!b.started) {
-    const list = '<p class="small" style="margin-bottom:6px">' + esc(explainTimed(b)) + '</p>' + b.ex.map((id, i) => '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + id + '">' + esc(exName(id)) + '</button>' + swapBtn(b.orig[i], 'run') + '</div>').join('');
+    const list = '<p class="small" style="margin-bottom:6px">' + esc(explainTimed(b)) + '</p>' + b.ex.map((id, i) => '<div class="ex-row"><button class="grow" style="text-align:left" data-action="exInfo" data-id="' + id + '">' + esc(exName(id)) + '</button>' + swapBtn(b.orig[i], 'run', id, b.ex.filter((_, j) => j !== i)) + '</div>').join('');
     return ['<h2 style="margin-bottom:6px">' + esc(b.title) + '</h2><div class="card flat">' + list + '</div><p class="tiny muted">De timer loopt vanzelf door alle oefeningen en rustpauzes. Je hoort een piep bij elke wissel.</p>', '<button class="btn primary block big" data-action="startBlock">Start ' + esc(b.title.toLowerCase()) + '</button><button class="btn block ghost sm" data-action="skipBlock" style="margin-top:8px">Overslaan</button>'];
   }
   const ph = b.phases[b.pi];
@@ -566,12 +580,12 @@ function timedHtml(b) {
   if (ph.k === 'work' && nx) nextTxt = 'Hierna: ' + exName(nx.ex);
   const title = ph.k === 'work' ? exName(ex) : ex ? 'Straks: ' + exName(ex) : '';
   const cue = ph.k === 'work' ? EX[ex].steps[Math.min(1, EX[ex].steps.length - 1)] : '';
-  const oi = b.ex.indexOf(ex);
+  const oi = ph.slot != null ? ph.slot : b.ex.indexOf(ex);
   const rounds = '<p class="small muted" style="margin-top:14px">Ronde ' + (ph.r || 1) + ' van ' + b.rounds + '</p><div class="rounds" style="margin-top:8px">' + b.doneRounds.map((d, i) => '<button class="' + (d ? 'done' : '') + '" data-action="toggleRound" data-i="' + i + '" aria-label="Ronde ' + (i + 1) + '">' + (d ? '✓' : i + 1) + '</button>').join('') + '</div>';
   const body = '<div class="timer-wrap"><span class="phase ' + cls + '">' + esc(phaseLabel(ph)) + '</span>' +
     '<div class="ring ' + cls + '"><svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="ringFg" cx="60" cy="60" r="52" stroke-dasharray="326.7" stroke-dashoffset="0"/></svg><div class="num" id="tnum">0:00</div></div>' +
     '<div class="cur-ex">' + esc(title) + '</div>' + (cue ? '<p class="cue">' + esc(cue) + '</p>' : '') +
-    (ex ? '<div class="row" style="justify-content:center;margin-top:10px"><button class="btn sm ghost" data-action="exInfo" data-id="' + ex + '">Uitleg & video</button>' + (oi >= 0 ? swapBtn(b.orig[oi], 'run') : '') + '</div>' : '') +
+    (ex ? '<div class="row" style="justify-content:center;margin-top:10px"><button class="btn sm ghost" data-action="exInfo" data-id="' + ex + '">Uitleg & video</button>' + (oi >= 0 ? swapBtn(b.orig[oi], 'run', b.ex[oi], b.ex.filter((_, j) => j !== oi)) : '') + '</div>' : '') +
     (nextTxt ? '<p class="next-up">' + esc(nextTxt) + '</p>' : '') + rounds +
     '<p class="tiny muted" style="margin-top:14px;max-width:360px">' + esc(explainTimed(b)) + '</p></div>';
   const foot = '<div class="controls" style="margin-top:0"><button class="ctl" data-action="prevPhase" aria-label="Vorige">' + ICON.prev + '</button><button class="ctl main" data-action="togglePlay" aria-label="Start/pauze">' + (a.running ? ICON.pause : ICON.play) + '</button><button class="ctl" data-action="skipPhase" aria-label="Volgende">' + ICON.next + '</button></div>';
@@ -605,7 +619,7 @@ function setsHtml(b) {
     const isNext = t && t.type === 'trans' && t.ii === ii;
     body += '<div class="set-card ' + (complete ? 'complete' : '') + (isNext ? ' upnext' : '') + '" id="sc-' + ii + '"><div class="row" style="align-items:flex-start"><div class="grow"><b>' + esc(exName(it.id)) + '</b>' + (it.id !== it.orig ? ' <span class="tiny muted">(gewisseld)</span>' : '') +
       '<div class="small muted">Doel: ' + it.planned + ' × ' + (it.kind === 'time' ? it.target + ' s' : it.target) + (e.side ? ' per kant' : '') + (it.w ? ' · ' + num(it.w) + ' kg' : '') + '</div><div class="pill" style="margin-top:6px;display:inline-block">⏱ ' + it.rest + ' s rust tussen sets</div></div>' +
-      '<div class="row" style="gap:6px">' + swapBtn(it.orig, 'run') + '<button class="btn sm ghost" data-action="exInfo" data-id="' + it.id + '" aria-label="Uitleg">ⓘ</button></div></div>' +
+      '<div class="row" style="gap:6px">' + swapBtn(it.orig, 'run', it.id, b.items.filter((_, j) => j !== ii).map(x => x.id)) + '<button class="btn sm ghost" data-action="exInfo" data-id="' + it.id + '" aria-label="Uitleg">ⓘ</button></div></div>' +
       '<p class="explain">' + esc(explainItem(it)) + '</p>';
     if (e.db || e.dbOpt) {
       const opts = (e.dbOpt ? [0] : []).concat(avail());
@@ -649,17 +663,27 @@ function updateTimerDisplay() {
   const t = a.timer; const tn = $('#tmrNum');
   if (t && tn) {
     if (t.startAt && now < t.startAt) { tn.textContent = String(Math.ceil((t.startAt - now) / 1000)); const l = $('#tmrLbl'); if (l) l.textContent = 'Klaar?'; }
-    else { tn.textContent = fmtTime(Math.ceil((t.end - now) / 1000)); const l = $('#tmrLbl'); if (l) l.textContent = t.type === 'hold' ? 'Vasthouden' : 'Bezig'; }
+    else if (t.type === 'hold') { const st = holdStage(t, now); tn.textContent = fmtTime(Math.ceil(st.rem)); const l = $('#tmrLbl'); if (l) l.textContent = st.lbl; }
+    else { tn.textContent = fmtTime(Math.ceil((t.end - now) / 1000)); const l = $('#tmrLbl'); if (l) l.textContent = 'Bezig'; }
   }
 }
 
+const SIDE_GAP = 5;
+function holdStage(t, now) {
+  if (!t.two) return { i: 0, lbl: 'Vasthouden', rem: (t.end - now) / 1000 };
+  const el = (now - t.startAt) / 1000;
+  if (el < t.sec) return { i: 0, lbl: 'Kant 1', rem: t.sec - el };
+  if (el < t.sec + SIDE_GAP) return { i: 1, lbl: 'Wissel van kant', rem: t.sec + SIDE_GAP - el };
+  return { i: 2, lbl: 'Kant 2', rem: (t.end - now) / 1000 };
+}
 function startItemTimer(ii, chain) {
   const b = curBlock(); const it = b.items[ii]; const now = Date.now();
   active.timer = { type: 'item', ii, chain: !!chain, startAt: now + 3000, end: now + 3000 + it.sec * 1000, sec: it.sec, side: !!EX[it.ex].side };
 }
 function startHold(ii, si) {
   const b = curBlock(); const it = b.items[ii]; const now = Date.now();
-  active.timer = { type: 'hold', ii, si, startAt: now + 3000, end: now + 3000 + it.sets[si].v * 1000, sec: it.sets[si].v, side: false };
+  const v = it.sets[si].v; const two = !!EX[it.id].side;
+  active.timer = { type: 'hold', ii, si, startAt: now + 3000, end: now + 3000 + (two ? v * 2 + SIDE_GAP : v) * 1000, sec: v, two };
 }
 function startRestAfter(b, ii) {
   const a = active; const it = b.items[ii]; const now = Date.now();
@@ -705,6 +729,10 @@ function tick() {
       const s = Math.ceil((a.tEnd - now) / 1000);
       const k = a.bi + ':' + b.pi + ':' + s;
       if (s <= 3 && s >= 1 && lastBeep !== k) { lastBeep = k; beep(660, 0.09); }
+      if (ph.side && ph.k === 'work') {
+        const hk = a.bi + ':' + b.pi + ':half';
+        if (s === Math.ceil(ph.sec / 2) && lastBeep !== hk) { lastBeep = hk; beep(990, 0.08); setTimeout(() => beep(990, 0.08), 160); buzz([80, 60, 80]); toast('Wissel van kant'); }
+      }
     }
     if (changed) { saveActive(); renderRunner(); return; }
   }
@@ -715,8 +743,17 @@ function tick() {
       if (lastBeep !== k) { lastBeep = k; beep(660, 0.09); }
     } else {
       if (t.startAt && !t.begun) { t.begun = true; beep(1046, 0.25); buzz([150]); }
-      const s = Math.ceil((t.end - now) / 1000);
-      const k = 't' + t.end + s;
+      let s = Math.ceil((t.end - now) / 1000);
+      if (t.type === 'hold' && t.two) {
+        const st = holdStage(t, now);
+        if ((t.stage || 0) !== st.i) {
+          t.stage = st.i;
+          if (st.i === 1) { beep(990, 0.12); setTimeout(() => beep(990, 0.12), 180); buzz([80, 60, 80]); toast('Wissel van kant'); }
+          if (st.i === 2) { beep(1046, 0.25); buzz([150]); }
+        }
+        s = Math.ceil(st.rem);
+      }
+      const k = 't' + t.end + (t.stage || 0) + ':' + s;
       if (s <= 3 && s >= 1 && lastBeep !== k) { lastBeep = k; beep(660, 0.09); }
       if (t.side) {
         const half = Math.ceil(t.sec / 2); const hk = 'h' + t.end;
@@ -728,10 +765,17 @@ function tick() {
   updateTimerDisplay();
 }
 
+function creditPhase(b, ph, doneSec) {
+  if (b.type === 'timed' && ph.k === 'work' && ph.last) b.doneRounds[ph.r - 1] = true;
+  if (b.type === 'run' && ph.k === 'run') {
+    const sec = doneSec == null ? ph.sec : clamp(Math.round(doneSec), 0, ph.sec);
+    b.runSec += sec;
+    if (sec >= ph.sec / 2) b.doneRuns++;
+  }
+}
 function phaseEnd(b) {
   const a = active; const ph = b.phases[b.pi];
-  if (b.type === 'timed' && ph.k === 'work' && ph.last) b.doneRounds[ph.r - 1] = true;
-  if (b.type === 'run' && ph.k === 'run') { b.doneRuns++; b.runSec += ph.sec; }
+  creditPhase(b, ph);
   b.pi++;
   if (b.pi >= b.phases.length) {
     b.pi = b.phases.length - 1; b.done = true; a.running = false; a.tLeft = null;
@@ -1071,7 +1115,7 @@ function foodLog() {
 function viewMore() {
   setTitle('Meer');
   const s = state.settings; const pr = state.profile;
-  let h = '<div class="section-title" style="margin-top:6px">Back-up</div><div class="card">';
+  let h = updateBanner() + '<div class="section-title" style="margin-top:6px">Back-up</div><div class="card">';
   h += '<p class="small muted" style="margin-bottom:12px">Je gegevens staan alleen op deze telefoon. Maak regelmatig een back-up, bijvoorbeeld naar Google Drive. ' + (state.lastBackup ? 'Laatste back-up: <b>' + fmtDate(state.lastBackup, { day: 'numeric', month: 'long', year: 'numeric' }) + '</b>.' : '<b>Nog geen back-up gemaakt.</b>') + '</p>';
   h += '<button class="btn primary block" data-action="shareBackup">Back-up delen (bijv. Google Drive)</button><div class="row" style="margin-top:8px"><button class="btn grow" data-action="downloadBackup">Downloaden</button><button class="btn grow" data-action="copyBackup">Kopieer als tekst</button></div>';
   h += '<p class="small" style="font-weight:700;margin:16px 0 8px">Terugzetten</p><div class="row"><button class="btn grow ghost" data-action="pickRestore">Kies back-upbestand</button><button class="btn grow ghost" data-action="pasteRestore">Plak tekst</button></div></div>';
@@ -1114,7 +1158,7 @@ function viewMore() {
   h += '</div>';
 
   h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account en geen server. Alles wat je invoert blijft in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
-  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.1</p>';
+  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.2</p>';
   return h;
 }
 function toggleRow(t, sub, key, on) {
@@ -1128,51 +1172,73 @@ function applyTheme() {
   document.querySelectorAll('meta[name="theme-color"]').forEach(m => { m.setAttribute('content', dark ? '#17141b' : '#f7f3f0'); m.removeAttribute('media'); });
 }
 
-function backupText() { return JSON.stringify({ app: 'fitworden', version: 2, exported: new Date().toISOString(), data: state }); }
-function backupName() { return 'fitworden-backup-' + dateKey() + '.json'; }
+const BACKUP_VERSION = 2;
+function backupText() { return JSON.stringify({ app: 'fitworden', version: BACKUP_VERSION, exported: new Date().toISOString(), data: state }); }
+function backupName() { return 'fitworden-backup-' + dateKey() + '.txt'; }
 function markBackup() { state.lastBackup = new Date().toISOString(); save(); render(); }
 
+function confirmBackupSheet(title, text) {
+  openSheet('<h2>' + esc(title) + '</h2><p class="muted">' + text + '</p><p class="small muted" style="margin-top:8px">Pas als het bestand buiten deze telefoon staat (bijv. in Google Drive) is het een echte back-up. Dan telt de app hem mee en verdwijnt de herinnering.</p><div class="actions"><button class="btn block primary" data-action="backupConfirm">Het staat veilig: markeer als back-up</button><button class="btn block ghost" data-action="closeSheet">Nog niet</button></div>');
+}
 async function shareBackup() {
   const txt = backupText();
-  if (navigator.share && window.File) {
-    const candidates = [new File([txt], backupName(), { type: 'application/json' }), new File([txt], backupName(), { type: 'text/plain' })];
-    const file = candidates.find(f => navigator.canShare && navigator.canShare({ files: [f] }));
-    if (file) {
-      try { await navigator.share({ files: [file], title: 'Fit worden back-up', text: 'Back-up van Fit worden (' + dateKey() + ')' }); markBackup(); toast('Back-up gedeeld'); }
-      catch (e) { if (e.name !== 'AbortError') { toast('Delen lukte niet, bestand wordt gedownload'); downloadBackup(); } }
+  let file = null;
+  try { file = new File([txt], backupName(), { type: 'text/plain' }); } catch (e) {}
+  const canFile = file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] });
+  if (canFile) {
+    try {
+      await navigator.share({ files: [file], title: 'Fit worden back-up' });
+      markBackup(); toast('Back-up gedeeld');
       return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
     }
   }
-  toast('Delen wordt niet ondersteund, bestand wordt gedownload');
-  downloadBackup();
+  saveFile(txt);
+  confirmBackupSheet('Delen lukte niet', 'De deelknop werkt niet in deze browser, dus het back-upbestand <b>' + esc(backupName()) + '</b> is gedownload. Open de app Google Drive, tik op <b>+ → Uploaden</b> en kies het bestand uit Downloads.');
 }
-function downloadBackup() {
-  const blob = new Blob([backupText()], { type: 'application/json' });
+function saveFile(txt) {
+  const blob = new Blob([txt], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = backupName();
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  markBackup();
+}
+function downloadBackup() {
+  saveFile(backupText());
+  confirmBackupSheet('Back-up gedownload', 'Het bestand <b>' + esc(backupName()) + '</b> staat in je Downloads. Zet het daarna in Google Drive (Drive-app: <b>+ → Uploaden</b>).');
 }
 async function copyBackup() {
   const txt = backupText();
-  try { await navigator.clipboard.writeText(txt); markBackup(); toast('Back-up gekopieerd. Plak hem bijv. in een notitie of e-mail aan jezelf.', 3800); }
-  catch (e) {
-    openSheet('<h2>Kopieer als tekst</h2><p class="small muted">Selecteer alles en kopieer het.</p><textarea class="input" id="copyArea" style="min-height:200px" readonly>' + esc(txt) + '</textarea><div class="actions"><button class="btn block primary" data-action="copyDone">Ik heb het gekopieerd</button></div>');
+  try {
+    await navigator.clipboard.writeText(txt);
+    confirmBackupSheet('Back-up gekopieerd', 'De back-up staat op je klembord. Plak hem in een notitie, e-mail aan jezelf of een Google Doc.');
+  } catch (e) {
+    openSheet('<h2>Kopieer als tekst</h2><p class="small muted">Selecteer alles, kopieer het en plak het in een notitie of e-mail aan jezelf.</p><textarea class="input" id="copyArea" style="min-height:200px" readonly>' + esc(txt) + '</textarea><div class="actions"><button class="btn block primary" data-action="backupConfirm">Gekopieerd en bewaard: markeer als back-up</button><button class="btn block ghost" data-action="closeSheet">Nog niet</button></div>');
     const ta = $('#copyArea'); ta.focus(); ta.select();
   }
 }
+
+function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 function parseBackup(text) {
-  const o = JSON.parse(text);
-  const d = o && o.app === 'fitworden' && o.data ? o.data : o;
-  if (!d || typeof d !== 'object' || !d.settings || !Array.isArray(d.sessions)) throw new Error('bad');
+  let o;
+  try { o = JSON.parse(text); } catch (e) { return { err: 'Dit bestand is geen Fit worden back-up (geen leesbare tekst).' }; }
+  if (!isObj(o) || o.app !== 'fitworden' || !isObj(o.data)) return { err: 'Dit bestand is geen back-up van Fit worden.' };
+  if (+o.version > BACKUP_VERSION) return { err: 'Deze back-up is gemaakt met een nieuwere versie van de app. Werk de app eerst bij.' };
+  const d = o.data;
+  if (!isObj(d.settings) || !Array.isArray(d.sessions) || !isObj(d.prog)) return { err: 'De back-up is onvolledig of beschadigd.' };
+  if ((d.prog.timed && !isObj(d.prog.timed)) || (d.prog.ex && !isObj(d.prog.ex))) return { err: 'De voortgang in de back-up is beschadigd.' };
+  const badS = d.sessions.filter(x => !isObj(x) || !x.id || typeof x.date !== 'string' || isNaN(Date.parse(x.date)) || !Array.isArray(x.blocks) || typeof x.dur !== 'number');
+  if (badS.length) return { err: 'De back-up bevat ' + badS.length + ' beschadigde training(en).' };
+  if (d.weights && (!Array.isArray(d.weights) || d.weights.some(w => !isObj(w) || typeof w.kg !== 'number' || typeof w.date !== 'string'))) return { err: 'De gewichtsmetingen in de back-up zijn beschadigd.' };
+  if (d.food && !isObj(d.food)) return { err: 'De voedingsgegevens in de back-up zijn beschadigd.' };
   return { data: d, exported: o.exported };
 }
 function restoreFrom(text) {
-  let r;
-  try { r = parseBackup(text.trim()); } catch (e) { toast('Dit is geen geldig Fit worden back-upbestand'); return; }
+  const r = parseBackup(String(text || '').trim());
+  if (r.err) { openSheet('<h2>Terugzetten lukt niet</h2><p class="muted">' + esc(r.err) + '</p><p class="small muted" style="margin-top:8px">Je huidige gegevens zijn niet aangepast. Kies het bestand dat begint met <b>fitworden-backup-</b>.</p><div class="actions"><button class="btn block primary" data-action="closeSheet">Oké</button></div>'); return; }
   restoreFrom.pending = r.data;
-  openSheet('<h2>Back-up terugzetten?</h2><p class="muted">' + (r.exported ? 'Back-up van ' + fmtDate(r.exported, { day: 'numeric', month: 'long', year: 'numeric' }) + ': ' : '') + r.data.sessions.length + ' trainingen, ' + (r.data.weights || []).length + ' gewichtsmetingen.</p><p class="small muted" style="margin-top:8px">De huidige gegevens op dit apparaat worden vervangen.</p><div class="actions"><button class="btn block primary" data-action="doRestore">Terugzetten</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>');
+  openSheet('<h2>Back-up terugzetten?</h2><p class="muted">' + (r.exported ? 'Back-up van ' + fmtDate(r.exported, { day: 'numeric', month: 'long', year: 'numeric' }) + ': ' : '') + r.data.sessions.length + ' trainingen, ' + (r.data.weights || []).length + ' gewichtsmetingen, ' + Object.keys(r.data.food || {}).length + ' dagen voeding.</p><p class="small muted" style="margin-top:8px">De huidige gegevens op dit apparaat worden vervangen.</p><div class="actions"><button class="btn block primary" data-action="doRestore">Terugzetten</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>');
 }
 
 function startWorkout(wid, len) {
@@ -1189,13 +1255,16 @@ function applySwapToActive(orig) {
     if (b.type === 'sets') b.items.forEach((it, i) => {
       if (it.orig !== orig) return;
       if (it.sets.some(s => s.done)) { ok = false; return; }
-      b.items[i] = setItemRuntime(itemPlan(orig, active.len, b.rest, active.deload));
+      let nw = resolve(orig);
+      if (b.items.some((x, j) => j !== i && x.id === nw)) nw = orig;
+      b.items[i] = setItemRuntime(itemPlan(orig, active.len, b.rest, active.deload, nw));
     });
     if (b.type === 'timed') b.orig.forEach((o, i) => {
       if (o !== orig) return;
-      const old = b.ex[i]; const nw = resolve(orig);
+      let nw = resolve(orig);
+      if (b.ex.some((x, j) => j !== i && x === nw)) nw = orig;
       b.ex[i] = nw;
-      b.phases.forEach(p => { if (p.ex === old) p.ex = nw; });
+      b.phases.forEach(p => { if (p.slot === i) { p.ex = nw; if (p.k === 'work') p.side = !!EX[nw].side; } });
     });
   });
   return ok;
@@ -1217,8 +1286,8 @@ const ACT = {
   previewLen: el => openSheet(previewHtml(el.dataset.w, el.dataset.len), true),
   exInfo: el => openSheet(exInfoHtml(el.dataset.id)),
   exInfo2: el => openSheet(exInfoHtml(el.dataset.id).replace('data-action="closeSheet">Sluiten', 'data-action="swapReopen">Terug')),
-  swapOpen: el => { ACT._swap = { orig: el.dataset.orig, ctx: el.dataset.ctx }; openSheet(swapHtml(el.dataset.orig, el.dataset.ctx)); },
-  swapReopen: () => { const s = ACT._swap; if (s) openSheet(swapHtml(s.orig, s.ctx)); else closeSheet(); },
+  swapOpen: el => { const d = el.dataset; ACT._swap = { orig: d.orig, ctx: d.ctx, cur: d.cur, taken: d.taken ? d.taken.split(',') : [] }; const s = ACT._swap; openSheet(swapHtml(s.orig, s.ctx, s.cur, s.taken)); },
+  swapReopen: () => { const s = ACT._swap; if (s) openSheet(swapHtml(s.orig, s.ctx, s.cur, s.taken)); else closeSheet(); },
   swapBack: el => { if (el.dataset.ctx === 'preview' && ui.pv) openSheet(previewHtml(ui.pv.wid, ui.pv.len)); else closeSheet(); },
   doSwap: el => {
     const { orig, to, ctx } = el.dataset;
@@ -1253,7 +1322,9 @@ const ACT = {
   skipPhase: () => {
     const a = active; const b = curBlock();
     const ph = b.phases[b.pi];
-    if (b.pi >= b.phases.length - 1) { if (b.type === 'run' && ph.k === 'run') { b.doneRuns++; b.runSec += ph.sec; } b.done = true; a.running = false; a.tLeft = null; saveActive(); renderRunner(); return; }
+    const left = a.running ? a.tEnd - Date.now() : (a.tLeft ?? ph.sec * 1000);
+    creditPhase(b, ph, ph.sec - left / 1000);
+    if (b.pi >= b.phases.length - 1) { b.done = true; a.running = false; a.tLeft = null; saveActive(); renderRunner(); return; }
     b.pi++;
     const n = b.phases[b.pi];
     if (a.running) a.tEnd = Date.now() + n.sec * 1000; else a.tLeft = n.sec * 1000;
@@ -1279,7 +1350,7 @@ const ACT = {
   endRunEarly: () => {
     const a = active; const b = curBlock();
     const ph = b.phases[b.pi];
-    if (ph.k === 'run' && a.running) { const done = ph.sec - (a.tEnd - Date.now()) / 1000; b.runSec += Math.max(0, Math.round(done)); }
+    if (ph.k === 'run') { const left = a.running ? a.tEnd - Date.now() : (a.tLeft ?? ph.sec * 1000); creditPhase(b, ph, ph.sec - left / 1000); }
     const coolIdx = b.phases.findIndex(p => p.cool);
     b.pi = coolIdx; a.running = true; a.tEnd = Date.now() + b.phases[coolIdx].sec * 1000;
     beep(740, 0.25); saveActive(); renderRunner();
@@ -1382,10 +1453,11 @@ const ACT = {
   deloadStart: () => { startDeload(); render(); toast('Rustweek gestart: 7 dagen lichter trainen'); },
   deloadStop: () => { stopDeload(); render(); toast('Rustweek gestopt'); },
   deloadSnooze: () => { state.deloadSnooze = new Date(Date.now() + 7 * DAY).toISOString(); save(); render(); toast('Oké, over een week vraag ik het opnieuw'); },
+  applyUpdate: () => applyUpdate(),
   shareBackup: () => shareBackup(),
   downloadBackup: () => downloadBackup(),
   copyBackup: () => copyBackup(),
-  copyDone: () => { closeSheet(); markBackup(); },
+  backupConfirm: () => { closeSheet(); markBackup(); toast('Back-up gemarkeerd'); },
   pickRestore: () => $('#restoreFile').click(),
   pasteRestore: () => openSheet('<h2>Plak back-uptekst</h2><textarea class="input" id="pasteArea" style="min-height:180px" placeholder="Plak hier de tekst van je back-up"></textarea><div class="actions"><button class="btn block primary" data-action="pasteGo">Controleren</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>'),
   pasteGo: () => restoreFrom($('#pasteArea').value || ''),
@@ -1467,19 +1539,28 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', app
 
 function requestPersist() { try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {} }
 
+let swReg = null;
+function canReloadNow() {
+  const f = document.activeElement;
+  return state.settings.onboarded && $('#runner').hidden && $('#modal').hidden && !(f && /INPUT|TEXTAREA|SELECT/.test(f.tagName));
+}
+function applyUpdate() { if (ui.reloading) return; ui.reloading = true; location.reload(); }
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-    let reloaded = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloaded || (active && !$('#runner').hidden)) return;
-      reloaded = true; location.reload();
-    });
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    if (canReloadNow()) applyUpdate();
+    else { ui.updateReady = true; if ($('#runner').hidden) render(); }
   });
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => { swReg = r; }).catch(() => {});
+  });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && swReg) swReg.update().catch(() => {}); });
 }
 
 applyTheme();
 checkDeloadEnd();
 save();
+if (active) saveActive();
 if (state.settings.onboarded) requestPersist();
 render();
