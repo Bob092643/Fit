@@ -63,9 +63,10 @@ function migrate(s) {
 function load() {
   try { return migrate(JSON.parse(localStorage.getItem(KEY))); } catch (e) { return defaultState(); }
 }
-function save() {
+function saveLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Opslaan mislukt: opslag vol?'); }
 }
+function save() { saveLocal(); cloudTouch(); }
 function convertActive(a) {
   a.blocks = a.blocks.map(b => {
     if (b.type === 'flow') return { type: 'check', title: b.title, items: b.phases.filter(p => p.k === 'work').map(p => ({ ex: p.ex, sec: p.sec, done: !!b.done })), done: !!b.done, started: true };
@@ -271,7 +272,7 @@ function openSheet(html, keepScroll) {
   m.hidden = false;
   if (keepScroll) $('.sheet', m).scrollTop = top;
 }
-function closeSheet() { const m = $('#modal'); m.hidden = true; m.innerHTML = ''; ui.edit = null; }
+function closeSheet() { const m = $('#modal'); m.hidden = true; m.innerHTML = ''; ui.edit = null; if (ui.needRender) { ui.needRender = false; render(); } }
 function confirmSheet(title, text, okLabel, onOk, danger) {
   confirmSheet.cb = onOk;
   openSheet('<h2>' + esc(title) + '</h2><p class="muted">' + esc(text) + '</p><div class="actions"><button class="btn block ' + (danger ? 'danger' : 'primary') + '" data-action="confirmOk">' + esc(okLabel) + '</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>');
@@ -279,6 +280,7 @@ function confirmSheet(title, text, okLabel, onOk, danger) {
 
 function sessionsThisWeek() { const s = startOfWeek().getTime(); return state.sessions.filter(x => new Date(x.date).getTime() >= s); }
 function needsBackup() {
+  if (cloudOn()) return false;
   if (!state.sessions.length && !state.weights.length && !Object.keys(state.food).length) return false;
   return !state.lastBackup || Date.now() - new Date(state.lastBackup).getTime() > 7 * DAY;
 }
@@ -343,7 +345,8 @@ function viewOnboarding() {
     '<div class="field"><span>Welke dumbbells heb je? (tik aan)</span><div class="chips">' + WEIGHT_OPTIONS.map(w => '<button class="chip ' + (s.weights.includes(w) ? 'on' : '') + '" data-action="toggleWeight" data-w="' + w + '">' + num(w) + ' kg</button>').join('') + '</div></div>' +
     '<div class="field"><span>Weekplan</span><div class="seg"><button class="' + (s.plan === 'mix' ? 'on' : '') + '" data-action="setPlan" data-v="mix">Thuis + hardlopen</button><button class="' + (s.plan === 'thuis' ? 'on' : '') + '" data-action="setPlan" data-v="thuis">Alleen thuis</button></div>' +
     '<p class="tiny muted" style="margin-top:6px">Thuis + hardlopen wisselt de thuistrainingen A, B en C af met het rustig opbouwende loopschema.</p></div>' +
-    '<button class="btn primary block big" data-action="finishOnboarding" style="margin-top:10px">Aan de slag</button></div>';
+    '<button class="btn primary block big" data-action="finishOnboarding" style="margin-top:10px">Aan de slag</button>' +
+    (window.FIREBASE_CONFIG ? '<button class="btn ghost block" data-action="onbConnect" style="margin-top:10px">Ik heb al een code (andere telefoon)</button>' : '') + '</div>';
 }
 
 function workoutBadge(wid) { const w = WORKOUTS[wid]; return '<span class="badge c-' + w.color + '">' + w.short + '</span>'; }
@@ -1115,9 +1118,10 @@ function foodLog() {
 function viewMore() {
   setTitle('Meer');
   const s = state.settings; const pr = state.profile;
-  let h = updateBanner() + '<div class="section-title" style="margin-top:6px">Back-up</div><div class="card">';
-  h += '<p class="small muted" style="margin-bottom:12px">Je gegevens staan alleen op deze telefoon. Maak regelmatig een back-up, bijvoorbeeld naar Google Drive. ' + (state.lastBackup ? 'Laatste back-up: <b>' + fmtDate(state.lastBackup, { day: 'numeric', month: 'long', year: 'numeric' }) + '</b>.' : '<b>Nog geen back-up gemaakt.</b>') + '</p>';
-  h += '<button class="btn primary block" data-action="shareBackup">Back-up delen (bijv. Google Drive)</button><div class="row" style="margin-top:8px"><button class="btn grow" data-action="downloadBackup">Downloaden</button><button class="btn grow" data-action="copyBackup">Kopieer als tekst</button></div>';
+  const co = cloudOn();
+  let h = updateBanner() + cloudCard() + '<div class="section-title">' + (co ? 'Extra back-up' : 'Back-up') + '</div><div class="card">';
+  h += '<p class="small muted" style="margin-bottom:12px">' + (co ? 'Je gegevens worden automatisch in de cloud opgeslagen. Wil je daarnaast een eigen kopie, maak dan af en toe een extra back-up. ' : 'Je gegevens staan alleen op deze telefoon. Maak regelmatig een back-up, bijvoorbeeld naar Google Drive, of zet hierboven cloud-opslag aan. ') + (state.lastBackup ? 'Laatste back-up: <b>' + fmtDate(state.lastBackup, { day: 'numeric', month: 'long', year: 'numeric' }) + '</b>.' : '<b>Nog geen back-up gemaakt.</b>') + '</p>';
+  h += '<button class="btn primary block" data-action="shareBackup">' + (co ? 'Extra back-up delen' : 'Back-up delen (bijv. Google Drive)') + '</button><div class="row" style="margin-top:8px"><button class="btn grow" data-action="downloadBackup">Downloaden</button><button class="btn grow" data-action="copyBackup">Kopieer als tekst</button></div>';
   h += '<p class="small" style="font-weight:700;margin:16px 0 8px">Terugzetten</p><div class="row"><button class="btn grow ghost" data-action="pickRestore">Kies back-upbestand</button><button class="btn grow ghost" data-action="pasteRestore">Plak tekst</button></div></div>';
 
   const en = energy(); const lastKg = profileKg();
@@ -1157,8 +1161,8 @@ function viewMore() {
   }
   h += '</div>';
 
-  h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account en geen server. Alles wat je invoert blijft in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
-  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.2</p>';
+  h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account. ' + (co ? 'Je gegevens staan op dit apparaat en als kopie in de cloud (Firebase van Google), alleen te vinden met je persoonlijke code. Een lopende training wordt niet naar de cloud gestuurd.' : 'Zonder cloud-opslag blijft alles wat je invoert in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.') + '</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
+  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.3</p>';
   return h;
 }
 function toggleRow(t, sub, key, on) {
@@ -1268,6 +1272,199 @@ function applySwapToActive(orig) {
     });
   });
   return ok;
+}
+
+const CKEY = 'fitworden.cloud';
+const FB_VERSION = '12.19.0';
+const FB_URL = 'https://www.gstatic.com/firebasejs/' + FB_VERSION + '/';
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CODE_LEN = 24;
+const PUSH_DELAY = 1500;
+const MAX_DOC = 900000;
+
+const cloud = {
+  meta: loadCloudMeta(), db: null, loading: null, timer: null, busy: false, again: false,
+  status: 'idle', lastPull: 0, pending: null
+};
+
+function loadCloudMeta() {
+  try { const m = JSON.parse(localStorage.getItem(CKEY)); if (m && typeof m === 'object') return m; } catch (e) {}
+  return { enabled: false, code: null, localUpdatedAt: 0, dirty: false };
+}
+function saveCloudMeta() { try { localStorage.setItem(CKEY, JSON.stringify(cloud.meta)); } catch (e) {} }
+function cloudOn() { return !!(cloud.meta.enabled && cloud.meta.code && window.FIREBASE_CONFIG); }
+
+function newCode() {
+  const b = new Uint8Array(CODE_LEN);
+  crypto.getRandomValues(b);
+  return Array.from(b, x => CODE_CHARS[x % CODE_CHARS.length]).join('');
+}
+function fmtCode(c) { return (c || '').match(/.{1,4}/g).join('-'); }
+function normCode(v) { return String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function validCode(c) { return c.length === CODE_LEN && [...c].every(ch => CODE_CHARS.includes(ch)); }
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.async = false;
+    s.onload = res; s.onerror = () => { s.remove(); rej(new Error('sdk')); };
+    document.head.appendChild(s);
+  });
+}
+function ensureDb() {
+  if (cloud.db) return Promise.resolve(cloud.db);
+  if (!window.FIREBASE_CONFIG) return Promise.reject(Object.assign(new Error('noconfig'), { code: 'noconfig' }));
+  if (!cloud.loading) {
+    cloud.loading = (window.firebase && firebase.firestore ? Promise.resolve() : loadScript(FB_URL + 'firebase-app-compat.js').then(() => loadScript(FB_URL + 'firebase-firestore-compat.js')))
+      .then(() => {
+        const app = firebase.apps.find(a => a.name === 'fitworden') || firebase.initializeApp(window.FIREBASE_CONFIG, 'fitworden');
+        cloud.db = app.firestore();
+        return cloud.db;
+      })
+      .catch(e => { cloud.loading = null; throw Object.assign(e, { code: e.code || 'unavailable' }); });
+  }
+  return cloud.loading;
+}
+function docRef(code) { return cloud.db.collection('fitworden').doc(code); }
+function withTimeout(p, ms) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { code: 'unavailable' })), ms))]);
+}
+
+function setCloudStatus(st) {
+  cloud.status = st;
+  const el = $('#syncStatus'); if (!el) return;
+  const map = { saved: ['Opgeslagen', 'ok'], saving: ['Opslaan…', 'busy'], offline: ['Cloud offline', 'off'], denied: ['Controleer de Firestore-regels', 'err'], error: ['Opslaan mislukt', 'err'], toobig: ['Te groot voor cloud', 'err'] };
+  const m = map[st];
+  if (!cloudOn() || !m) { el.hidden = true; return; }
+  el.hidden = false; el.textContent = m[0]; el.className = 'sync ' + m[1];
+}
+function cloudErr(e) {
+  const c = e && e.code;
+  if (c === 'permission-denied') { setCloudStatus('denied'); return 'denied'; }
+  if (c === 'unavailable' || c === 'deadline-exceeded' || !navigator.onLine) { setCloudStatus('offline'); return 'offline'; }
+  setCloudStatus('error'); return 'error';
+}
+
+function cloudTouch() {
+  if (!cloudOn()) return;
+  cloud.meta.localUpdatedAt = Date.now();
+  cloud.meta.dirty = true;
+  saveCloudMeta();
+  schedulePush();
+}
+function schedulePush(delay = PUSH_DELAY) {
+  if (!cloudOn()) return;
+  clearTimeout(cloud.timer);
+  if (!navigator.onLine) { setCloudStatus('offline'); return; }
+  setCloudStatus('saving');
+  cloud.timer = setTimeout(pushNow, delay);
+}
+async function pushNow() {
+  if (!cloudOn() || !cloud.meta.dirty) return;
+  if (cloud.busy) { cloud.again = true; return; }
+  if (!navigator.onLine) { setCloudStatus('offline'); return; }
+  const data = JSON.stringify(state);
+  if (data.length > MAX_DOC) { setCloudStatus('toobig'); return; }
+  const stamp = cloud.meta.localUpdatedAt;
+  cloud.busy = true; setCloudStatus('saving');
+  try {
+    await ensureDb();
+    await withTimeout(docRef(cloud.meta.code).set({ data, updatedAt: stamp }), 15000);
+    if (cloud.meta.localUpdatedAt === stamp) cloud.meta.dirty = false;
+    saveCloudMeta();
+    setCloudStatus(cloud.meta.dirty ? 'saving' : 'saved');
+  } catch (e) { cloudErr(e); }
+  cloud.busy = false;
+  if (cloud.again && cloud.meta.dirty) { cloud.again = false; schedulePush(300); }
+}
+
+function parseRemote(snap) {
+  const d = snap.data() || {};
+  let raw = null;
+  try { raw = JSON.parse(d.data || 'null'); } catch (e) {}
+  const r = parseBackup(JSON.stringify({ app: 'fitworden', version: BACKUP_VERSION, data: raw }));
+  if (r.err) throw Object.assign(new Error(r.err), { code: 'baddata' });
+  return { data: r.data, updatedAt: +d.updatedAt || 0 };
+}
+function applyRemote(r) {
+  state = migrate(r.data);
+  state.settings.onboarded = true;
+  saveLocal();
+  cloud.meta.localUpdatedAt = r.updatedAt; cloud.meta.dirty = false; saveCloudMeta();
+  applyTheme();
+  if ($('#modal').hidden) render(); else ui.needRender = true;
+}
+async function pullNow(force) {
+  if (!cloudOn() || cloud.busy) return;
+  if (!force && Date.now() - cloud.lastPull < 4000) return;
+  if (!navigator.onLine) { setCloudStatus('offline'); return; }
+  cloud.lastPull = Date.now();
+  try {
+    await ensureDb();
+    const snap = await withTimeout(docRef(cloud.meta.code).get(), 15000);
+    if (!snap.exists) { cloud.meta.dirty = true; saveCloudMeta(); schedulePush(0); return; }
+    const r = parseRemote(snap);
+    if (r.updatedAt > cloud.meta.localUpdatedAt) { applyRemote(r); setCloudStatus('saved'); toast('Nieuwste gegevens uit de cloud geladen'); }
+    else if (cloud.meta.dirty || r.updatedAt < cloud.meta.localUpdatedAt) { cloud.meta.dirty = true; saveCloudMeta(); schedulePush(0); }
+    else setCloudStatus('saved');
+  } catch (e) {
+    if (e.code === 'baddata') { setCloudStatus('error'); toast('De cloudgegevens zijn beschadigd en zijn niet geladen.', 4000); return; }
+    cloudErr(e);
+  }
+}
+
+function cloudCard() {
+  const m = cloud.meta;
+  let h = '<div class="section-title" id="cloudSec">Automatisch opslaan</div><div class="card">';
+  if (!window.FIREBASE_CONFIG) return h + '<p class="small muted">Cloud-opslag is niet beschikbaar: het bestand firebase-config.js ontbreekt.</p></div>';
+  if (cloudOn()) {
+    const st = { saved: 'Alles is opgeslagen in de cloud.', saving: 'Bezig met opslaan…', offline: 'Geen verbinding. Je werkt gewoon lokaal door; zodra je weer online bent wordt alles opgeslagen.', denied: 'De cloud weigert toegang. Controleer de Firestore-regels.', error: 'Opslaan is mislukt. De app probeert het later opnieuw.', toobig: 'Je gegevens zijn te groot voor de cloud. Maak een extra back-up.' }[cloud.status] || 'Cloud-opslag staat aan.';
+    h += '<div class="row" style="margin-bottom:10px"><span class="dot-on"></span><b>Cloud-opslag staat aan</b></div><p class="small muted" style="margin-bottom:12px">' + esc(st) + ' Elke wijziging wordt na een paar seconden opgeslagen.</p>';
+  } else if (m.code) {
+    h += '<p class="small muted" style="margin-bottom:12px">Cloud-opslag staat uit. Je cloudgegevens zijn nog bewaard onder je code.</p><button class="btn primary block" data-action="cloudResume">Weer aanzetten</button>';
+  } else {
+    h += '<p class="small muted" style="margin-bottom:12px">Sla na elke wijziging automatisch een kopie op in de cloud. Handig als je telefoon kwijtraakt of je een nieuwe krijgt. Je hebt geen account nodig: je krijgt een persoonlijke code.</p><button class="btn primary block" data-action="cloudEnable">Cloud-opslag aanzetten</button>';
+  }
+  if (m.code) {
+    h += '<div class="codebox"><span class="tiny muted">Jouw code</span><b id="cloudCode">' + (ui.showCode ? esc(fmtCode(m.code)) : '••••-••••-••••-••••-••••-••••') + '</b><div class="row" style="margin-top:8px"><button class="btn sm ghost grow" data-action="cloudShow">' + (ui.showCode ? 'Verbergen' : 'Tonen') + '</button><button class="btn sm ghost grow" data-action="cloudCopy">Kopieer code</button></div></div>' +
+      '<p class="tiny muted" style="margin-top:8px"><b>Bewaar deze code goed</b>, bijvoorbeeld in je wachtwoordmanager. Met de code haal je je gegevens terug op een nieuwe telefoon. <b>Deel hem met niemand</b>: wie de code heeft, kan je gegevens bekijken en wijzigen.</p>';
+  }
+  h += '<p class="small" style="font-weight:700;margin:16px 0 8px">Al een code?</p><div class="row"><input class="input" id="cloudIn" placeholder="XXXX-XXXX-XXXX-…" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="btn" data-action="cloudConnect">Verbinden</button></div>';
+  if (m.code) {
+    h += '<div class="row" style="margin-top:16px">' + (cloudOn() ? '<button class="btn sm ghost grow" data-action="cloudOffAsk">Uitzetten</button>' : '') + '<button class="btn sm ghost grow" data-action="cloudDelAsk" style="color:#c8453a">Cloudgegevens verwijderen</button></div>';
+  }
+  return h + '</div>';
+}
+
+async function cloudEnable(code) {
+  cloud.meta = { enabled: true, code, localUpdatedAt: Date.now(), dirty: true };
+  saveCloudMeta(); ui.showCode = false;
+  render(); setCloudStatus('saving');
+  await pushNow();
+  render();
+  toast('Cloud-opslag staat aan. Tik op Tonen of Kopieer code en bewaar je code goed.', 4200);
+}
+async function cloudResume() {
+  cloud.meta.enabled = true; saveCloudMeta(); render();
+  await pullNow(true);
+  render();
+}
+async function cloudLookup(code) {
+  openSheet('<h2>Zoeken…</h2><p class="muted">Even kijken of er gegevens bij deze code horen.</p>');
+  try {
+    await ensureDb();
+    const snap = await withTimeout(docRef(code).get(), 15000);
+    if (!snap.exists) { openSheet('<h2>Niets gevonden</h2><p class="muted">Bij deze code staan geen gegevens in de cloud. Controleer of je hem goed hebt overgenomen.</p><div class="actions"><button class="btn block primary" data-action="closeSheet">Oké</button></div>'); return; }
+    const r = parseRemote(snap);
+    cloud.pending = { code, r };
+    const here = state.sessions.length;
+    openSheet('<h2>Gegevens gevonden</h2><p class="muted"><b>' + r.data.sessions.length + ' trainingen</b>, ' + (r.data.weights || []).length + ' gewichtsmetingen' + (r.updatedAt ? ', laatst opgeslagen ' + fmtDate(new Date(r.updatedAt).toISOString(), { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '') + '.</p>' +
+      '<p class="small muted" style="margin-top:8px">Wil je deze gegevens op dit apparaat gebruiken? Wat hier nu staat' + (here ? ' (' + here + ' trainingen)' : '') + ' wordt vervangen. Daarna wordt dit apparaat automatisch opgeslagen onder deze code.</p>' +
+      '<div class="actions"><button class="btn block primary" data-action="cloudConnectOk">Vervangen en verbinden</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>');
+  } catch (e) {
+    const msg = e.code === 'permission-denied' ? 'Geen toegang. Controleer de Firestore-regels.' : e.code === 'baddata' ? 'De gegevens bij deze code zijn beschadigd.' : e.code === 'noconfig' ? 'firebase-config.js ontbreekt.' : 'Geen verbinding met de cloud. Probeer het opnieuw als je online bent.';
+    openSheet('<h2>Verbinden lukt niet</h2><p class="muted">' + esc(msg) + '</p><div class="actions"><button class="btn block primary" data-action="closeSheet">Oké</button></div>');
+  }
 }
 
 const ACT = {
@@ -1465,7 +1662,46 @@ const ACT = {
   setTheme: el => { state.settings.theme = el.dataset.v; save(); applyTheme(); render(); },
   setGoal: el => { state.settings.weekGoal = +el.dataset.v; save(); render(); },
   install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); try { await deferredInstall.userChoice; } catch (e) {} deferredInstall = null; render(); },
-  wipeAsk: () => confirmSheet('Alle gegevens wissen?', 'Al je trainingen, voortgang, voeding en instellingen worden van dit apparaat verwijderd. Maak eerst een back-up als je die wilt bewaren.', 'Alles wissen', () => { localStorage.removeItem(KEY); localStorage.removeItem(AKEY); state = defaultState(); active = null; applyTheme(); ui.tab = 'home'; render(); }, true),
+  wipeAsk: () => confirmSheet('Alle gegevens wissen?', 'Al je trainingen, voortgang, voeding en instellingen worden van dit apparaat verwijderd en de koppeling met de cloud gaat uit. ' + (cloud.meta.code ? 'De gegevens in de cloud blijven bewaard: met je code kun je ze later terughalen. Heb je de code niet bewaard, noteer hem dan eerst.' : 'Maak eerst een back-up als je die wilt bewaren.'), 'Alles wissen', () => {
+    clearTimeout(cloud.timer); localStorage.removeItem(KEY); localStorage.removeItem(AKEY); localStorage.removeItem(CKEY);
+    cloud.meta = loadCloudMeta(); setCloudStatus('idle'); state = defaultState(); active = null; applyTheme(); ui.tab = 'home'; render();
+  }, true),
+  goCloud: () => { ui.tab = 'more'; render(); const el = $('#cloudSec'); el && el.scrollIntoView(); },
+  cloudEnable: () => cloudEnable(newCode()),
+  cloudResume: () => cloudResume(),
+  cloudShow: () => { ui.showCode = !ui.showCode; render(); const el = $('#cloudSec'); el && el.scrollIntoView(); },
+  cloudCopy: async () => {
+    const c = fmtCode(cloud.meta.code);
+    try { await navigator.clipboard.writeText(c); toast('Code gekopieerd. Bewaar hem op een veilige plek.', 3200); }
+    catch (e) { ui.showCode = true; render(); toast('Kopiëren lukte niet; de code staat nu zichtbaar.'); }
+  },
+  cloudConnect: () => {
+    const c = normCode(($('#cloudIn') || {}).value);
+    if (!validCode(c)) { toast('Die code klopt niet: hij heeft 24 tekens (letters en cijfers).', 3200); return; }
+    if (c === cloud.meta.code && cloudOn()) { toast('Dit apparaat gebruikt deze code al.'); return; }
+    cloudLookup(c);
+  },
+  onbConnect: () => openSheet('<h2>Verbinden met je code</h2><p class="small muted" style="margin-bottom:12px">Heb je Fit worden al op een andere telefoon met cloud-opslag? Vul je code in om je gegevens hier op te halen.</p><input class="input" id="cloudIn" placeholder="XXXX-XXXX-XXXX-…" autocomplete="off" autocapitalize="characters" spellcheck="false"><div class="actions"><button class="btn block primary" data-action="cloudConnect">Zoeken</button><button class="btn block ghost" data-action="closeSheet">Annuleren</button></div>'),
+  cloudConnectOk: () => {
+    const p = cloud.pending; if (!p) return;
+    clearTimeout(cloud.timer);
+    cloud.meta = { enabled: true, code: p.code, localUpdatedAt: p.r.updatedAt, dirty: false };
+    saveCloudMeta(); cloud.pending = null; ui.needRender = false;
+    applyRemote(p.r); closeSheet(); ui.tab = 'home'; render(); setCloudStatus('saved');
+    toast('Verbonden. Je gegevens zijn opgehaald.', 3200);
+  },
+  cloudOffAsk: () => confirmSheet('Cloud-opslag uitzetten?', 'Wijzigingen worden dan alleen nog op dit apparaat opgeslagen. De gegevens in de cloud blijven bewaard; met je code kun je later weer verbinden.', 'Uitzetten', async () => {
+    if (cloud.meta.dirty) await pushNow();
+    clearTimeout(cloud.timer); cloud.meta.enabled = false; saveCloudMeta(); setCloudStatus('idle'); render(); toast('Cloud-opslag staat uit');
+  }),
+  cloudDelAsk: () => confirmSheet('Cloudgegevens verwijderen?', 'De kopie in de cloud wordt definitief verwijderd en cloud-opslag gaat uit. De gegevens op dit apparaat blijven gewoon staan.', 'Verwijderen', async () => {
+    try {
+      await ensureDb();
+      await withTimeout(docRef(cloud.meta.code).delete(), 15000);
+      clearTimeout(cloud.timer); cloud.meta = { enabled: false, code: null, localUpdatedAt: 0, dirty: false }; saveCloudMeta(); ui.showCode = false;
+      setCloudStatus('idle'); render(); toast('Cloudgegevens verwijderd');
+    } catch (e) { toast(e.code === 'permission-denied' ? 'Verwijderen geweigerd: controleer de Firestore-regels.' : 'Verwijderen lukt nu niet. Probeer het opnieuw als je online bent.', 3800); }
+  }, true),
   freeLog: () => openSheet('<h2>Losse activiteit</h2><p class="small muted" style="margin-bottom:14px">Bijvoorbeeld een wandeling, fietstocht of een extra rondje hardlopen.</p>' +
     '<label class="field"><span>Wat</span><select class="input" id="flWhat"><option>Wandelen</option><option>Hardlopen</option><option>Fietsen</option><option>Zwemmen</option><option>Anders</option></select></label>' +
     '<div class="row"><label class="field grow"><span>Minuten</span><input class="input" id="flMin" inputmode="numeric" placeholder="30"></label><label class="field grow"><span>Km (optioneel)</span><input class="input" id="flKm" inputmode="decimal" placeholder="3,5"></label></div>' +
@@ -1530,7 +1766,11 @@ document.addEventListener('input', ev => {
   if (el.id === 'finNote' || el.id === 'finKm') keepFinInputs();
   if (el.dataset && el.dataset.ef && ui.edit) ui.edit[el.dataset.ef] = el.value;
 });
+window.addEventListener('online', () => { if (!cloudOn()) return; if (cloud.meta.dirty) schedulePush(300); else pullNow(true); });
+window.addEventListener('offline', () => { if (cloudOn()) setCloudStatus('offline'); });
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && cloudOn()) pullNow();
+  if (document.visibilityState === 'hidden' && cloudOn() && cloud.meta.dirty) pushNow();
   if (document.visibilityState === 'visible' && active && !$('#runner').hidden) { lockScreen(); tick(); }
   if (document.visibilityState === 'hidden') saveActive();
 });
@@ -1560,7 +1800,8 @@ if ('serviceWorker' in navigator) {
 
 applyTheme();
 checkDeloadEnd();
-save();
+saveLocal();
 if (active) saveActive();
 if (state.settings.onboarded) requestPersist();
 render();
+if (cloudOn()) { setCloudStatus(cloud.meta.dirty ? 'saving' : 'saved'); pullNow(true); }

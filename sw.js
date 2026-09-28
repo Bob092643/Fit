@@ -1,5 +1,5 @@
-const CACHE = 'fitworden-v3';
-const ASSETS = ['./', 'index.html', 'styles.css', 'data.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
+const CACHE = 'fitworden-v4';
+const ASSETS = ['./', 'index.html', 'styles.css', 'data.js', 'app.js', 'firebase-config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 const INDEX = new URL('index.html', self.registration.scope).href;
 const TIMEOUT = 3500;
 
@@ -25,7 +25,7 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return;
+  if (url.hostname === 'firestore.googleapis.com' || url.origin !== location.origin) return;
   const isNav = req.mode === 'navigate';
   const fresh = isNav || /\.(html|js|css|webmanifest)$/.test(url.pathname);
   e.respondWith(caches.open(CACHE).then(async cache => {

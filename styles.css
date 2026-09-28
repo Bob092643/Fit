@@ -286,3 +286,18 @@ textarea.input { min-height: 80px; resize: vertical; }
 .quick:active { transform: scale(.98); }
 .energy { background: var(--card2); border-radius: 14px; padding: 12px 14px; display: grid; gap: 6px; }
 .energy .big { font-size: 17px; font-weight: 700; color: var(--accent); }
+
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.topbar h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync { flex: none; font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 14px; background: var(--card2); color: var(--muted); max-width: 62vw; line-height: 1.25; text-align: left; }
+.sync::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: currentColor; }
+.sync.ok { background: var(--teal-soft); color: var(--teal); }
+.sync.busy { background: var(--sun-soft); color: var(--sun); }
+.sync.off { background: var(--card2); color: var(--muted); }
+.sync.err { background: #fbe0dd; color: #b8382d; }
+:root[data-theme="dark"] .sync.err { background: #4a1f1c; color: #ff8a7d; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sync.err { background: #4a1f1c; color: #ff8a7d; } }
+.dot-on { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); flex: none; }
+.codebox { background: var(--card2); border-radius: 14px; padding: 12px 14px; margin-top: 14px; }
+.codebox span { display: block; margin-bottom: 4px; }
+.codebox b { display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 15px; letter-spacing: 0; white-space: nowrap; overflow-x: auto; }

@@ -18,6 +18,7 @@ try { var s = JSON.parse(localStorage.getItem('fitworden.v1') || '{}'); var t = 
 <body>
 <header class="topbar" id="topbar">
   <h1 id="pageTitle">Fit worden</h1>
+  <button id="syncStatus" class="sync" data-action="goCloud" hidden></button>
 </header>
 <main id="view" class="view"></main>
 <nav class="tabbar" id="tabbar">
@@ -31,6 +32,7 @@ try { var s = JSON.parse(localStorage.getItem('fitworden.v1') || '{}'); var t = 
 <div id="modal" class="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
 <input type="file" id="restoreFile" accept=".txt,.json,text/plain,application/json" hidden>
+<script src="firebase-config.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>
