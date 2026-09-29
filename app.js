@@ -254,7 +254,10 @@ function curPhase(a = active) { const b = curBlock(a); return b && b.phases ? b.
 
 function ensureAudio() {
   try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx.onstatechange = () => { if (audioCtx.state === 'running' && active) syncPlan(true); };
+    }
     if (audioCtx.state === 'suspended') audioCtx.resume();
   } catch (e) {}
 }
@@ -268,15 +271,56 @@ function beep(freq = 880, dur = 0.12, vol = 0.25) {
     o.start(t); o.stop(t + dur + 0.02);
   } catch (e) {}
 }
+const audioPlan = { sig: '', nodes: [], keep: null };
+function planTone(at, freq, dur, vol = 0.25) {
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine'; o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+  g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(vol, at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  o.start(at); o.stop(at + dur + 0.02);
+  audioPlan.nodes.push({ o, at });
+}
+function clearPlan() {
+  const now = audioCtx ? audioCtx.currentTime : 0;
+  audioPlan.nodes.forEach(n => { if (n.at > now + 0.02) { try { n.o.stop(0); n.o.disconnect(); } catch (e) {} } });
+  audioPlan.nodes = []; audioPlan.sig = '';
+  if (audioPlan.keep) { try { audioPlan.keep.stop(); audioPlan.keep.disconnect(); } catch (e) {} audioPlan.keep = null; }
+}
+function syncPlan(force) {
+  const a = active; const b = a && curBlock();
+  const on = !!(a && !a.finishing && b && b.phases && b.started && !b.done && a.running && audioCtx && audioCtx.state !== 'closed' && state.settings.sound && !$('#runner').hidden);
+  if (!on) { if (audioPlan.sig || audioPlan.keep) clearPlan(); return; }
+  let end = a.tEnd; for (let i = b.pi + 1; i < b.phases.length; i++) end += b.phases[i].sec * 1000;
+  const sig = a.bi + ':' + Math.round(end / 250);
+  if (!force && sig === audioPlan.sig) return;
+  clearPlan(); audioPlan.sig = sig;
+  try {
+    const base = audioCtx.currentTime, now = Date.now();
+    let t = (a.tEnd - now) / 1000;
+    for (let i = b.pi; i < b.phases.length; i++) {
+      const p = b.phases[i]; const st = t - p.sec;
+      if (p.side && p.k === 'work') { const h = st + p.sec / 2; if (h > 0.05) { planTone(base + h, 990, 0.08); planTone(base + h + 0.16, 990, 0.08); } }
+      [3, 2, 1].forEach(c => { const at = t - c; if (at > 0.05 && at > st + 0.5) planTone(base + at, 660, 0.09); });
+      const nx = b.phases[i + 1];
+      if (t > 0.02) { if (nx) planTone(base + t, nx.k === 'work' || nx.k === 'run' ? 1046 : 740, 0.28); else { planTone(base + t, 523, 0.18); planTone(base + t + 0.2, 784, 0.35); } }
+      if (nx) t += nx.sec;
+    }
+    const k = audioCtx.createOscillator(), g = audioCtx.createGain();
+    k.frequency.value = 30; g.gain.value = 0.001; k.connect(g); g.connect(audioCtx.destination); k.start(); audioPlan.keep = k;
+  } catch (e) { audioPlan.sig = ''; }
+}
 function buzz(p) { if (state.settings.vibrate && navigator.vibrate) try { navigator.vibrate(p); } catch (e) {} }
 async function lockScreen() {
   try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch (e) {}
 }
 function unlockScreen() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
 
-function toast(msg, ms = 2600) {
-  const t = $('#toast'); t.textContent = msg; t.hidden = false;
-  clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, ms);
+function toast(msg, ms = 2600, undo) {
+  const t = $('#toast');
+  ui.undo = undo || null;
+  if (undo) { t.innerHTML = '<span>' + esc(msg) + '</span><button class="undo" data-action="undo">Ongedaan maken</button>'; ms = Math.max(ms, 6000); }
+  else t.textContent = msg;
+  t.hidden = false; t.classList.toggle('has-undo', !!undo);
+  clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; ui.undo = null; }, ms);
 }
 function openSheet(html, keepScroll) {
   const m = $('#modal');
@@ -419,6 +463,8 @@ function updateBanner() {
 
 function suggCard(s) {
   if (!s) return '';
+  if (s.dir === 'info') return '<div class="card sugg info"><b>🏅 ' + esc(s.title) + '</b><p class="small" style="margin-top:4px">' + esc(s.text) + '</p><p class="tiny muted" style="margin-top:4px">' + esc(s.why) + '</p>' +
+    '<div class="row" style="margin-top:12px"><button class="btn sm teal" data-action="laterSugg" data-id="' + s.id + '">Oké</button></div></div>';
   return '<div class="card sugg"><b>' + esc(s.title) + '</b><p class="small" style="margin-top:4px">' + esc(s.text) + '</p><p class="tiny muted" style="margin-top:4px">' + esc(s.why) + '</p>' +
     '<div class="row" style="margin-top:12px"><button class="btn sm teal" data-action="applySugg" data-id="' + s.id + '">Toepassen</button><button class="btn sm ghost" data-action="laterSugg" data-id="' + s.id + '">Nog niet</button></div></div>';
 }
@@ -535,7 +581,7 @@ function openRunner() {
 }
 function closeRunner() {
   $('#runner').hidden = true; $('#runner').innerHTML = ''; document.body.style.overflow = '';
-  clearInterval(tickTimer); tickTimer = null; unlockScreen();
+  clearInterval(tickTimer); tickTimer = null; unlockScreen(); clearPlan();
 }
 
 function renderRunner() {
@@ -559,6 +605,7 @@ function renderRunner() {
   if (sameBlock) $('.run-body').scrollTop = top;
   renderRunner._bi = a.bi + (a.finishing ? 100 : 0);
   updateTimerDisplay();
+  syncPlan();
 }
 
 const ICON = {
@@ -770,10 +817,11 @@ function tick() {
       const ph = b.phases[b.pi];
       const s = Math.ceil((a.tEnd - now) / 1000);
       const k = a.bi + ':' + b.pi + ':' + s;
-      if (s <= 3 && s >= 1 && lastBeep !== k) { lastBeep = k; beep(660, 0.09); }
+      const planned = !!audioPlan.sig;
+      if (s <= 3 && s >= 1 && lastBeep !== k) { lastBeep = k; if (!planned) beep(660, 0.09); }
       if (ph.side && ph.k === 'work') {
         const hk = a.bi + ':' + b.pi + ':half';
-        if (s === Math.ceil(ph.sec / 2) && lastBeep !== hk) { lastBeep = hk; beep(990, 0.08); setTimeout(() => beep(990, 0.08), 160); buzz([80, 60, 80]); toast('Wissel van kant'); }
+        if (s === Math.ceil(ph.sec / 2) && lastBeep !== hk) { lastBeep = hk; if (!planned) { beep(990, 0.08); setTimeout(() => beep(990, 0.08), 160); } buzz([80, 60, 80]); toast('Wissel van kant'); }
       }
     }
     if (changed) { saveActive(); renderRunner(); return; }
@@ -821,12 +869,13 @@ function phaseEnd(b) {
   b.pi++;
   if (b.pi >= b.phases.length) {
     b.pi = b.phases.length - 1; b.done = true; a.running = false; a.tLeft = null;
-    beep(523, 0.18); setTimeout(() => beep(784, 0.35), 200); buzz([300, 100, 300]);
+    if (!audioPlan.sig) { beep(523, 0.18); setTimeout(() => beep(784, 0.35), 200); }
+    buzz([300, 100, 300]);
     return;
   }
   a.tEnd += b.phases[b.pi].sec * 1000;
   const n = b.phases[b.pi];
-  beep(n.k === 'work' || n.k === 'run' ? 1046 : 740, 0.28);
+  if (!audioPlan.sig) beep(n.k === 'work' || n.k === 'run' ? 1046 : 740, 0.28);
   buzz(n.k === 'work' || n.k === 'run' ? [200] : [100, 80, 100]);
 }
 
@@ -845,9 +894,10 @@ function finalizeRecord() {
   return rec;
 }
 
+const RUN_MILESTONES = [300, 600, 900, 1200, 1500, 1800];
 function findRecords(rec) {
   if (rec.deload) return [];
-  const prev = realSessions();
+  const prev = realSessions().filter(s => s.id !== rec.id);
   const out = [];
   for (const b of rec.blocks) {
     if (b.type === 'sets') for (const it of b.items) {
@@ -856,23 +906,14 @@ function findRecords(rec) {
       if (!old.length) continue;
       const best = Math.max(...it.sets), was = Math.max(...old.map(y => Math.max(...y.sets)));
       const unit = it.kind === 'time' ? ' s' : ' herhalingen';
-      if (best > was) out.push(exName(it.id) + ': ' + best + unit + (EX[it.id].side ? ' per kant' : '') + ' in één set (was ' + was + ')');
+      if (best > was && best > it.target) out.push(exName(it.id) + ': ' + best + unit + (EX[it.id].side ? ' per kant' : '') + ' in één set, meer dan gevraagd');
       const wMax = Math.max(0, ...old.map(y => y.w || 0));
-      if (it.w && it.w > wMax) out.push(exName(it.id) + ': zwaarst ooit, ' + num(it.w) + ' kg');
+      if (it.w && it.w > wMax) out.push(exName(it.id) + ': voor het eerst met ' + num(it.w) + ' kg');
     }
-    if (b.type === 'timed' && (b.key === 'A1' || b.key === 'C1')) {
-      const mins = s2 => Math.round(s2.done * s2.n * s2.work / 6) / 10;
-      const old = []; prev.forEach(s => s.blocks.forEach(x => { if (x.type === 'timed' && x.key === b.key) old.push(mins(x)); }));
-      if (old.length && mins(b) > Math.max(...old)) out.push(b.title + ': meeste werktijd tot nu toe, ' + num(mins(b)) + ' min');
-    }
-    if (b.type === 'run') {
-      const old = []; prev.forEach(s => s.blocks.forEach(x => { if (x.type === 'run') old.push(x); }));
-      if (old.length) {
-        const longest = Math.max(0, ...old.filter(x => x.done).map(x => x.run));
-        if (b.done && b.run > longest) out.push('Langste stuk hardlopen tot nu toe: ' + fmtRunSec(b.run));
-        const most = Math.max(...old.map(x => x.runSec));
-        if (b.runSec > most) out.push('Meeste minuten hardgelopen in één training: ' + fmtMin(b.runSec));
-      }
+    if (b.type === 'run' && b.done) {
+      const longest = Math.max(0, ...prev.flatMap(s => s.blocks.filter(x => x.type === 'run' && x.done).map(x => x.run)));
+      const m = RUN_MILESTONES.filter(x => b.run >= x && longest < x).pop();
+      if (m) out.push('Mijlpaal: ' + (m / 60) + ' minuten aan één stuk hardgelopen!');
     }
   }
   if (rec.km) { const old = prev.filter(s => s.km).map(s => s.km); if (old.length && rec.km > Math.max(...old)) out.push('Verste afstand tot nu toe: ' + num(rec.km) + ' km'); }
@@ -917,7 +958,10 @@ function evaluate(rec) {
       } else if (rec.len === 'kort') {
       } else if (good && b.done >= b.rounds) {
         p.ok++;
-        if ((p.ok >= need || rec.rating === 1) && p.lvl < lad.length - 1) out.push({ t: 'timed', key: b.key, dir: 'up', to: { lvl: p.lvl + 1 }, title: b.title + ': zwaarder', text: fmtLadder(lad[p.lvl]) + ' → ' + fmtLadder(lad[p.lvl + 1]), why: 'Je haalde alle rondes en het voelde goed te doen.' });
+        if (p.ok >= need || rec.rating === 1) {
+          if (p.lvl < lad.length - 1) out.push({ t: 'timed', key: b.key, dir: 'up', to: { lvl: p.lvl + 1 }, title: b.title + ': zwaarder', text: fmtLadder(lad[p.lvl]) + ' → ' + fmtLadder(lad[p.lvl + 1]), why: 'Je haalde alle rondes en het voelde goed te doen.' });
+          else if (!p.maxShown) { p.maxShown = true; out.push({ t: 'max', key: b.key, dir: 'info', title: b.title + ': hoogste niveau bereikt', text: 'Je doet nu ' + fmtLadder(lad[p.lvl]) + '. Zwaarder dan dit wordt het niet vanzelf.', why: 'Wil je meer? Kies Lang voor een extra ronde, wissel een oefening voor een pittiger alternatief' + (state.settings.impact ? '' : ', of zet springoefeningen aan bij Meer') + '.' }); }
+        }
       } else p.ok = 0;
     }
     if (b.type === 'sets') {
@@ -933,7 +977,8 @@ function evaluate(rec) {
           p.ok++;
           if (p.ok >= (rec.rating === 3 ? 2 : need) || rec.rating === 1) {
             const to = nextExStep(it.id, p);
-            if (to) { const np = Object.assign({}, p, to); out.push({ t: 'ex', key: it.id, dir: 'up', to, title: exName(it.id) + ': zwaarder', text: fmtEx(it.id, p) + ' → ' + fmtEx(it.id, np), why: to.w ? 'Je haalde alle herhalingen: tijd voor een zwaardere dumbbell.' : 'Je haalde alle sets met het doelaantal.' }); }
+            if (to) { p.maxShown = false; const np = Object.assign({}, p, to); out.push({ t: 'ex', key: it.id, dir: 'up', to, title: exName(it.id) + ': zwaarder', text: fmtEx(it.id, p) + ' → ' + fmtEx(it.id, np), why: to.w ? 'Je haalde alle herhalingen: tijd voor een zwaardere dumbbell.' : 'Je haalde alle sets met het doelaantal.' }); }
+            else if (!p.maxShown) { p.maxShown = true; const e = EX[it.id]; out.push({ t: 'max', key: it.id, dir: 'info', title: exName(it.id) + ': hoogste stap bereikt', text: 'Je zit op ' + fmtEx(it.id, p) + '. Verder gaat de opbouw hier niet vanzelf.', why: (e.db || e.dbOpt) ? 'Heb je zwaardere dumbbells? Zet ze aan bij Meer → Mijn dumbbells, dan gaat de opbouw verder. Of wissel voor een pittiger alternatief.' : 'Wissel voor een pittiger alternatief, of zak langzamer (3 tellen omlaag) voor extra uitdaging.' }); }
           }
         } else if (!allHit) p.ok = 0;
       }
@@ -946,7 +991,10 @@ function evaluate(rec) {
         out.push({ t: 'run', key: 'run', dir: 'down', to: { lvl: Math.max(0, p.lvl - 1) }, title: 'Loopschema: rustiger aan', text: p.lvl > 0 ? 'Niveau ' + (p.lvl + 1) + ' → niveau ' + p.lvl + ' (' + fmtRun(RUN_LEVELS[p.lvl - 1]) + ')' : 'Blijf op niveau 1', why: 'Je gaf pijn of klachten aan. Neem minstens twee rustdagen, en blijft de pijn: laat het nakijken.' });
       } else if (good && b.done >= b.reps) {
         p.ok++;
-        if ((p.ok >= 2 || rec.rating === 1) && p.lvl < RUN_LEVELS.length - 1) out.push({ t: 'run', key: 'run', dir: 'up', to: { lvl: p.lvl + 1 }, title: 'Loopschema: volgend niveau', text: 'Niveau ' + (p.lvl + 2) + ': ' + fmtRun(RUN_LEVELS[p.lvl + 1]), why: 'Je hebt dit niveau goed afgerond. Twijfel je? Herhaal het gerust nog een keer.' });
+        if (p.ok >= 2 || rec.rating === 1) {
+          if (p.lvl < RUN_LEVELS.length - 1) out.push({ t: 'run', key: 'run', dir: 'up', to: { lvl: p.lvl + 1 }, title: 'Loopschema: volgend niveau', text: 'Niveau ' + (p.lvl + 2) + ': ' + fmtRun(RUN_LEVELS[p.lvl + 1]), why: 'Je hebt dit niveau goed afgerond. Twijfel je? Herhaal het gerust nog een keer.' });
+          else if (!p.maxShown) { p.maxShown = true; out.push({ t: 'max', key: 'run', dir: 'info', title: 'Loopschema voltooid!', text: 'Je loopt ' + fmtRun(RUN_LEVELS[p.lvl]) + '. Knap gedaan!', why: 'Houd dit vast door twee keer per week te lopen. Wil je verder? Loop af en toe iets sneller of verder, en leg extra loopjes vast als losse activiteit.' }); }
+        }
       } else p.ok = 0;
     }
   }
@@ -956,9 +1004,9 @@ function evaluate(rec) {
 
 function applySugg(id) {
   const s = state.sugg.find(x => x.id === id); if (!s) return;
-  if (s.t === 'timed') { const p = getTimed(s.key); p.lvl = s.to.lvl; p.ok = 0; }
+  if (s.t === 'timed') { const p = getTimed(s.key); p.lvl = s.to.lvl; p.ok = 0; if (s.dir === 'down') p.maxShown = false; }
   if (s.t === 'ex') { const p = getEx(s.key); Object.assign(p, s.to); p.ok = 0; }
-  if (s.t === 'run') { state.prog.run.lvl = s.to.lvl; state.prog.run.ok = 0; }
+  if (s.t === 'run') { state.prog.run.lvl = s.to.lvl; state.prog.run.ok = 0; if (s.dir === 'down') state.prog.run.maxShown = false; }
   state.sugg = state.sugg.filter(x => x.id !== id);
   save();
 }
@@ -1270,7 +1318,7 @@ function viewMore() {
   h += '</div>';
 
   h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account. ' + (co ? 'Je gegevens staan op dit apparaat en als kopie in de cloud (Firebase van Google), alleen te vinden met je persoonlijke code. Een lopende training wordt niet naar de cloud gestuurd.' : 'Zonder cloud-opslag blijft alles wat je invoert in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.') + '</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
-  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.7</p>';
+  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.8</p>';
   return h;
 }
 function toggleRow(t, sub, key, on) {
@@ -1695,7 +1743,7 @@ const ACT = {
     openSheet('<h2>Training stoppen?</h2><p class="muted">Je kunt opslaan wat je tot nu toe gedaan hebt.</p><div class="actions"><button class="btn block primary" data-action="stopSave">Stoppen en opslaan</button><button class="btn block" data-action="stopMin">Minimaliseren</button><button class="btn block ghost" data-action="stopDiscard" style="color:#c8453a">Weggooien</button><button class="btn block ghost" data-action="closeSheet">Doorgaan met trainen</button></div>');
   },
   stopSave: () => { closeSheet(); ACT.finish(); },
-  stopMin: () => { closeSheet(); if (active.running) { active.tLeft = active.tEnd - Date.now(); active.running = false; } active.timer = null; saveActive(); closeRunner(); render(); },
+  stopMin: () => { closeSheet(); if (active.running) { active.tLeft = active.tEnd - Date.now(); active.running = false; } active.timer = null; saveActive(); closeRunner(); ui.tab = 'home'; render(); window.scrollTo(0, 0); },
   stopDiscard: () => { closeSheet(); active = null; saveActive(); closeRunner(); render(); },
   rate: el => { active.fin.rating = +el.dataset.v; keepFinInputs(); saveActive(); renderRunner(); },
   pain: el => { active.fin.pain = el.checked; keepFinInputs(); saveActive(); },
@@ -1756,12 +1804,21 @@ const ACT = {
     addFood(ui.foodDate || dateKey(), { name, p, kcal }); render(); toast('Toegevoegd');
   },
   addMeal: el => { const m = MEALS.find(x => x.id === el.dataset.id); addFood(dateKey(), { name: m.name, p: m.p, kcal: m.kcal }); toast('Toegevoegd aan vandaag'); },
-  delFood: el => { const dk = ui.foodDate || dateKey(); state.food[dk] = dayFood(dk).filter(x => x.id !== el.dataset.id); if (!state.food[dk].length) delete state.food[dk]; save(); render(); },
+  delFood: el => {
+    const dk = ui.foodDate || dateKey(); const list = dayFood(dk); const i = list.findIndex(x => x.id === el.dataset.id); if (i < 0) return;
+    const item = list[i];
+    state.food[dk] = list.filter(x => x.id !== item.id); if (!state.food[dk].length) delete state.food[dk]; save(); render();
+    toast(item.name + ' verwijderd', 6000, () => { const l = state.food[dk] || (state.food[dk] = []); l.splice(Math.min(i, l.length), 0, item); save(); render(); toast('Teruggezet'); });
+  },
   goFood: () => { ui.tab = 'food'; ui.foodTab = 'log'; ui.foodDate = null; render(); window.scrollTo(0, 0); },
   goProfile: () => { ui.tab = 'more'; render(); const el = $('#profileSec'); el && el.scrollIntoView(); },
   setSex: el => { state.profile.sex = el.dataset.v; save(); render(); },
   fav: (el, ev) => { ev.preventDefault(); const id = el.dataset.id; const i = state.favs.indexOf(id); i >= 0 ? state.favs.splice(i, 1) : state.favs.push(id); save(); el.classList.toggle('on', i < 0); el.textContent = i < 0 ? '♥' : '♡'; if (ui.foodCat === 'Favorieten') render(); },
-  delSession: el => confirmSheet('Training verwijderen?', 'Deze training verdwijnt uit je historie en grafieken.', 'Verwijderen', () => { state.sessions = state.sessions.filter(s => s.id !== el.dataset.id); save(); render(); }, true),
+  delSession: el => confirmSheet('Training verwijderen?', 'Deze training verdwijnt uit je historie en grafieken.', 'Verwijderen', () => {
+    const rec = state.sessions.find(s => s.id === el.dataset.id); if (!rec) return;
+    state.sessions = state.sessions.filter(s => s.id !== rec.id); save(); render();
+    toast('Training verwijderd', 6000, () => { if (!state.sessions.some(s => s.id === rec.id)) { state.sessions.push(rec); state.sessions.sort((a, b) => a.date.localeCompare(b.date)); save(); render(); toast('Training teruggezet'); } });
+  }, true),
   editSession: el => openEdit(el.dataset.id),
   eCount: el => { const b = ui.edit.s.blocks[+el.dataset.bi]; const max = b.type === 'run' ? b.reps : b.rounds; b.done = clamp(b.done + (+el.dataset.d), 0, max); editRefresh(); },
   eAdj: el => { const it = ui.edit.s.blocks[+el.dataset.bi].items[+el.dataset.ii]; const st = it.sets[+el.dataset.si]; const step = it.kind === 'time' ? 5 : 1; st.v = Math.max(step, st.v + (+el.dataset.d) * step); editRefresh(); },
@@ -1789,7 +1846,12 @@ const ACT = {
     state.weights = state.weights.filter(x => x.date !== d); state.weights.push({ date: d, kg: Math.round(kg * 10) / 10 });
     save(); render(); toast('Gewicht opgeslagen');
   },
-  delWeight: el => { state.weights = state.weights.filter(x => x.date !== el.dataset.d); save(); render(); },
+  delWeight: el => {
+    const w = state.weights.find(x => x.date === el.dataset.d); if (!w) return;
+    state.weights = state.weights.filter(x => x.date !== w.date); save(); render();
+    toast('Meting van ' + fmtDate(w.date + 'T12:00:00', { day: 'numeric', month: 'long' }) + ' verwijderd', 6000, () => { if (!state.weights.some(x => x.date === w.date)) { state.weights.push(w); save(); render(); toast('Meting teruggezet'); } });
+  },
+  undo: () => { const f = ui.undo; ui.undo = null; $('#toast').hidden = true; clearTimeout(toast._t); if (f) f(); },
   deloadStart: () => { startDeload(); render(); toast('Rustweek gestart: 7 dagen lichter trainen'); },
   deloadStop: () => { stopDeload(); render(); toast('Rustweek gestopt'); },
   deloadSnooze: () => { state.deloadSnooze = new Date(Date.now() + 7 * DAY).toISOString(); save(); render(); toast('Oké, over een week vraag ik het opnieuw'); },
@@ -1933,7 +1995,7 @@ window.addEventListener('offline', () => { if (cloudOn()) setCloudStatus('offlin
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && cloudOn()) pullNow();
   if (document.visibilityState === 'hidden' && cloudOn() && cloud.meta.dirty) pushNow();
-  if (document.visibilityState === 'visible' && active && !$('#runner').hidden) { lockScreen(); tick(); }
+  if (document.visibilityState === 'visible' && active && !$('#runner').hidden) { lockScreen(); tick(); syncPlan(true); }
   if (document.visibilityState === 'hidden') saveActive();
 });
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; if (ui.tab === 'more') render(); });

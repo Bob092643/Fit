@@ -313,3 +313,7 @@ textarea.input { min-height: 80px; resize: vertical; }
 .records ul { margin: 6px 0 0; padding-left: 20px; font-size: 14px; }
 .records li { margin-bottom: 3px; }
 .set-row .lbl .tiny { font-weight: 600; color: var(--accent); }
+
+.toast.has-undo { display: flex; align-items: center; gap: 12px; text-align: left; }
+.toast .undo { flex: none; color: var(--accent); background: transparent; font-weight: 800; font-size: 14.5px; padding: 4px 2px; }
+.sugg.info { border-left-color: var(--sun); }
