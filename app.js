@@ -392,7 +392,7 @@ function viewHome() {
   const today = (new Date().getDay() + 6) % 7;
   h += '<div class="card"><div class="row between"><h3>Deze week</h3><span class="pill">' + wk.length + ' / ' + goal + ' trainingen</span></div><div class="week">' +
     days.map((d, i) => {
-      const dk = dateKey(new Date(sow.getTime() + i * DAY));
+      const dd = new Date(sow); dd.setDate(dd.getDate() + i); const dk = dateKey(dd);
       const ss = wk.filter(x => dateKey(x.date) === dk);
       return '<div class="d"><div class="dot ' + (ss.length ? 'done' : '') + (i === today ? ' today' : '') + '">' + (ss.length ? ss.map(x => WORKOUTS[x.wid] ? WORKOUTS[x.wid].short : '•').join('') : '') + '</div>' + d + '</div>';
     }).join('') + '</div>' +
@@ -896,8 +896,14 @@ function nextExStep(id, p) {
   return null;
 }
 
+function goodNeeded(rec) {
+  const prev = state.sessions.filter(s => s.id !== rec.id && s.wid === rec.wid && !s.deload && s.date < rec.date).pop();
+  if (!prev) return 2;
+  return (new Date(rec.date) - new Date(prev.date)) / DAY >= 12 ? 1 : 2;
+}
 function evaluate(rec) {
   if (rec.deload) return [];
+  const need = goodNeeded(rec);
   const good = rec.rating > 0 && rec.rating <= 2;
   const hard = rec.rating === 4 || rec.pain;
   const out = [];
@@ -908,9 +914,10 @@ function evaluate(rec) {
       if (hard) {
         p.ok = 0;
         if (p.lvl > 0) out.push({ t: 'timed', key: b.key, dir: 'down', to: { lvl: p.lvl - 1 }, title: b.title + ': stapje terug?', text: fmtLadder(lad[p.lvl]) + ' → ' + fmtLadder(lad[p.lvl - 1]), why: rec.pain ? 'Je gaf pijn of klachten aan. Een lichtere versie geeft je lichaam tijd.' : 'Het voelde te zwaar. Met iets minder houd je het vol.' });
-      } else if (good && b.done >= b.rounds && rec.len !== 'kort') {
+      } else if (rec.len === 'kort') {
+      } else if (good && b.done >= b.rounds) {
         p.ok++;
-        if ((p.ok >= 2 || rec.rating === 1) && p.lvl < lad.length - 1) out.push({ t: 'timed', key: b.key, dir: 'up', to: { lvl: p.lvl + 1 }, title: b.title + ': zwaarder', text: fmtLadder(lad[p.lvl]) + ' → ' + fmtLadder(lad[p.lvl + 1]), why: 'Je haalde alle rondes en het voelde goed te doen.' });
+        if ((p.ok >= need || rec.rating === 1) && p.lvl < lad.length - 1) out.push({ t: 'timed', key: b.key, dir: 'up', to: { lvl: p.lvl + 1 }, title: b.title + ': zwaarder', text: fmtLadder(lad[p.lvl]) + ' → ' + fmtLadder(lad[p.lvl + 1]), why: 'Je haalde alle rondes en het voelde goed te doen.' });
       } else p.ok = 0;
     }
     if (b.type === 'sets') {
@@ -921,11 +928,12 @@ function evaluate(rec) {
         if ((it.w || 0) !== (p.w || 0)) { if (it.sets.length) { p.w = it.w; p.ok = 0; } continue; }
         const allHit = it.sets.length >= it.planned && it.sets.every(v => v >= it.target);
         if (hard) { p.ok = 0; continue; }
-        if (allHit && rec.rating <= 3 && rec.len !== 'kort') {
+        if (rec.len === 'kort') continue;
+        if (allHit && rec.rating <= 3) {
           p.ok++;
-          if (p.ok >= 2 || rec.rating === 1) {
+          if (p.ok >= (rec.rating === 3 ? 2 : need) || rec.rating === 1) {
             const to = nextExStep(it.id, p);
-            if (to) { const np = Object.assign({}, p, to); out.push({ t: 'ex', key: it.id, dir: 'up', to, title: exName(it.id) + ': zwaarder', text: fmtEx(it.id, p) + ' → ' + fmtEx(it.id, np), why: to.w ? 'Je haalde twee keer alle herhalingen: tijd voor een zwaardere dumbbell.' : 'Je haalde alle sets met het doelaantal.' }); }
+            if (to) { const np = Object.assign({}, p, to); out.push({ t: 'ex', key: it.id, dir: 'up', to, title: exName(it.id) + ': zwaarder', text: fmtEx(it.id, p) + ' → ' + fmtEx(it.id, np), why: to.w ? 'Je haalde alle herhalingen: tijd voor een zwaardere dumbbell.' : 'Je haalde alle sets met het doelaantal.' }); }
           }
         } else if (!allHit) p.ok = 0;
       }
@@ -972,8 +980,14 @@ function lineChart(pts, opt = {}) {
   const ys = pts.map(p => p.y);
   let min = Math.min(...ys), max = Math.max(...ys);
   if (opt.zero) min = Math.min(0, min);
-  if (min === max) { min -= 1; max += 1; }
-  const padv = (max - min) * 0.12; min = opt.zero ? min : min - padv; max += padv;
+  const ints = ys.every(v => Number.isInteger(v));
+  if (ints) {
+    min = Math.max(opt.zero ? 0 : 0, Math.floor(min) - 1); max = Math.ceil(max) + 1;
+    const step = Math.max(1, Math.ceil((max - min) / 3)); max = min + 3 * step;
+  } else {
+    if (min === max) { min -= 1; max += 1; }
+    const padv = (max - min) * 0.12; min = opt.zero ? min : min - padv; max += padv;
+  }
   const x = i => L + (pts.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (pts.length - 1));
   const y = v => T + (H - T - B) * (1 - (v - min) / (max - min));
   let g = '';
@@ -1034,8 +1048,9 @@ function progOverview() {
   if (all.length !== S.length) h += '<p class="tiny muted" style="margin:8px 4px 0">Rustweektrainingen tellen wel mee in de totalen, maar niet in records en grafieken.</p>';
   const sow = startOfWeek().getTime(); const labels = [], vals = [];
   for (let i = 9; i >= 0; i--) {
-    const s = sow - i * 7 * DAY, e = s + 7 * DAY;
-    const d = new Date(s); labels.push(d.getDate() + '/' + (d.getMonth() + 1));
+    const d = new Date(sow); d.setDate(d.getDate() - 7 * i);
+    const d2 = new Date(d); d2.setDate(d2.getDate() + 7);
+    const s = d.getTime(), e = d2.getTime(); labels.push(d.getDate() + '/' + (d.getMonth() + 1));
     vals.push(Math.round(S.filter(x => { const t = new Date(x.date).getTime(); return t >= s && t < e; }).reduce((a, x) => a + x.dur, 0) / 60));
   }
   h += '<div class="card" style="margin-top:14px"><h3>Minuten per week</h3><p class="tiny muted" style="margin-bottom:6px">Laatste 10 weken (week begint op maandag)</p>' + barChart(labels, vals, { unit: ' min', label: 'Minuten per week' }) + '</div>';
@@ -1255,7 +1270,7 @@ function viewMore() {
   h += '</div>';
 
   h += '<div class="section-title">Privacy</div><div class="card"><p class="small muted">Fit worden heeft geen account. ' + (co ? 'Je gegevens staan op dit apparaat en als kopie in de cloud (Firebase van Google), alleen te vinden met je persoonlijke code. Een lopende training wordt niet naar de cloud gestuurd.' : 'Zonder cloud-opslag blijft alles wat je invoert in de opslag van deze browser op dit apparaat. Wis je de browsergegevens of verwijder je de app, dan zijn je gegevens weg; daarom de back-up.') + '</p><button class="btn block ghost" data-action="wipeAsk" style="margin-top:12px;color:#c8453a">Alle gegevens wissen</button></div>';
-  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.6</p>';
+  h += '<p class="tiny muted" style="text-align:center;margin:10px 0">Fit worden · versie 1.7</p>';
   return h;
 }
 function toggleRow(t, sub, key, on) {
